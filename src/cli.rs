@@ -33,11 +33,6 @@ pub enum Commands {
         #[arg(help = "Project root (default: auto-detect from cwd)")]
         path: Option<PathBuf>,
     },
-    #[command(about = "Add atlas instructions to CLAUDE.md for post-compaction recovery")]
-    Inject {
-        #[arg(help = "Project root (default: auto-detect from cwd)")]
-        path: Option<PathBuf>,
-    },
     #[command(about = "Look up a single symbol across all atlas data")]
     Lookup {
         #[arg(help = "Symbol name to look up")]

@@ -27,10 +27,6 @@ async fn main() -> Result<()> {
             let root = detect::find_project_root(path).await?;
             output::stats(&root).await?;
         }
-        Some(Commands::Inject { path }) => {
-            let root = detect::find_project_root(path).await?;
-            output::inject(&root).await?;
-        }
         Some(Commands::Lookup { symbol, path }) => {
             let root = detect::find_project_root(path).await?;
             output::lookup(&root, &symbol).await?;

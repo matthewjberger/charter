@@ -97,14 +97,6 @@ atlas status
   commit: a3f8c2d
 ```
 
-### `atlas inject`
-
-Adds recovery instructions to your `CLAUDE.md` file. After LLM context compaction, the LLM will see these instructions and know to run `atlas read` to reload structural context.
-
-```bash
-atlas inject   # Appends to CLAUDE.md (or creates it)
-```
-
 ## Output Files
 
 The `.atlas/` directory contains:
@@ -122,13 +114,23 @@ The `.atlas/` directory contains:
 
 The `.atlas/` directory is auto-gitignored (it creates its own `.gitignore`).
 
+## CLAUDE.md Prompt
+
+Add this to your project's `CLAUDE.md` to help the LLM recover context after compaction:
+
+```markdown
+## Codebase Context
+
+If you've lost context about the codebase structure (after compaction or in a new session), run `atlas read quick` (~6k tokens) for orientation.
+Use `atlas read` (~40k tokens) for broader context, or `atlas read full` (~60k tokens) for deep cross-cutting work.
+```
+
 ## Workflow
 
 **Initial setup:**
 ```bash
 cd my-rust-project
 atlas           # Generate initial capture
-atlas inject    # Add recovery instructions to CLAUDE.md
 ```
 
 **During development:**

@@ -14,17 +14,6 @@ use tokio::fs;
 use crate::cli::Tier;
 use crate::git::get_git_info;
 
-const ATLAS_INSTRUCTION_BLOCK: &str = r#"## Atlas Structural Context
-
-This project uses atlas to maintain structural context in `.atlas/`.
-If you've lost context about the codebase structure (e.g. after compaction), run `atlas read` to reload it (default tier: ~40k tokens, covers symbols + types + overview).
-Use `atlas read quick` (~6k tokens) if context budget is tight, or `atlas read full` (~65k tokens) for deep refactoring.
-The .atlas/ directory contains: symbol index with full signatures, trait/impl maps, cross-references, inverse dependencies, and module architecture.
-Generated from commit shown in the file headers — check `git diff <commit>..HEAD --name-only` if you need to verify freshness.
-"#;
-
-const ATLAS_MARKER: &str = "## Atlas Structural Context";
-
 pub(crate) fn format_qualifiers(is_async: bool, is_unsafe: bool, is_const: bool) -> String {
     let mut parts = Vec::new();
     if is_const {
@@ -90,50 +79,6 @@ pub(crate) fn churn_label(count: u32, high_threshold: u32, med_threshold: u32) -
     } else {
         "[stable]"
     }
-}
-
-pub async fn inject(root: &Path) -> Result<()> {
-    let claude_md_path = root.join("CLAUDE.md");
-
-    if claude_md_path.exists() {
-        let content = fs::read_to_string(&claude_md_path).await?;
-
-        if let Some(start_index) = content.find(ATLAS_MARKER) {
-            let before = &content[..start_index];
-            let after_marker = &content[start_index..];
-            let block_end = after_marker
-                .find("\n## ")
-                .or_else(|| after_marker.find("\n# "))
-                .map(|index| start_index + index)
-                .unwrap_or(content.len());
-
-            let before = before.trim_end();
-            let after = content[block_end..].trim_start();
-
-            let new_content = if after.is_empty() {
-                format!("{}\n\n{}", before, ATLAS_INSTRUCTION_BLOCK)
-            } else {
-                format!("{}\n\n{}\n{}", before, ATLAS_INSTRUCTION_BLOCK, after)
-            };
-
-            fs::write(&claude_md_path, new_content).await?;
-            println!("Updated atlas instructions in CLAUDE.md");
-        } else {
-            let new_content = if content.ends_with('\n') {
-                format!("{}\n{}", content, ATLAS_INSTRUCTION_BLOCK)
-            } else {
-                format!("{}\n\n{}", content, ATLAS_INSTRUCTION_BLOCK)
-            };
-
-            fs::write(&claude_md_path, new_content).await?;
-            println!("Appended atlas instructions to CLAUDE.md");
-        }
-    } else {
-        fs::write(&claude_md_path, ATLAS_INSTRUCTION_BLOCK).await?;
-        println!("Created CLAUDE.md with atlas instructions");
-    }
-
-    Ok(())
 }
 
 pub async fn lookup(root: &Path, symbol: &str) -> Result<()> {
