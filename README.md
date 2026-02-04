@@ -1,4 +1,4 @@
-<h1 align="center">charter</h1>
+<h1 align="center">charter 🗺️🌍</h1>
 
 <p align="center">
   <a href="https://github.com/matthewjberger/charter"><img alt="github" src="https://img.shields.io/badge/github-matthewjberger/charter-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20"></a>
