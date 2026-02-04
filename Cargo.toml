@@ -2,14 +2,21 @@
 name = "charter"
 version = "0.1.0"
 edition = "2024"
-description = "Fast structural context generator for codebases"
+description = "Fast structural context generator for Rust codebases, optimized for LLM consumption"
 authors = ["Matthew Berger <matthewjordanberger@gmail.com>"]
 homepage = "https://github.com/matthewjberger/charter"
 repository = "https://github.com/matthewjberger/charter"
+documentation = "https://github.com/matthewjberger/charter#readme"
+readme = "README.md"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 keywords = ["rust", "ast", "parser", "llm", "context"]
 categories = ["development-tools", "command-line-utilities"]
+exclude = [".charter/", ".github/"]
+
+[[bin]]
+name = "charter"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1.43", features = ["full"] }
