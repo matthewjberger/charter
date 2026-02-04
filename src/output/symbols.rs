@@ -10,8 +10,8 @@ use crate::extract::symbols::{
 };
 use crate::pipeline::{FileResult, PipelineResult};
 
-const CHAR_BUDGET: usize = 160_000;
-const MIN_COMPRESSION_DEPTH: usize = 3;
+const CHAR_BUDGET: usize = 50_000;
+const MIN_COMPRESSION_DEPTH: usize = 2;
 
 struct SymbolWriteContext<'a> {
     churn_data: &'a HashMap<PathBuf, u32>,
@@ -363,11 +363,19 @@ fn write_file_symbols(
         .filter(|imp| !types_defined_here.contains(imp.type_name.as_str()))
         .collect();
 
-    let has_normal_symbols = !file_result.parsed.symbols.symbols.is_empty();
+    let important_symbols: Vec<&Symbol> = file_result
+        .parsed
+        .symbols
+        .symbols
+        .iter()
+        .filter(|s| is_important_symbol(s))
+        .collect();
+
+    let has_important_symbols = !important_symbols.is_empty();
     let has_macros = !file_result.parsed.symbols.macros.is_empty();
     let has_external_impls = !external_impls.is_empty();
 
-    if !has_normal_symbols && !has_macros && !has_external_impls {
+    if !has_important_symbols && !has_macros && !has_external_impls {
         return Ok(());
     }
 
@@ -386,7 +394,7 @@ fn write_file_symbols(
         file_result.relative_path, file_result.lines, role, churn_label
     )?;
 
-    for symbol in &file_result.parsed.symbols.symbols {
+    for symbol in important_symbols {
         write_symbol(
             buffer,
             symbol,
@@ -414,6 +422,22 @@ fn write_file_symbols(
 
     writeln!(buffer)?;
     Ok(())
+}
+
+fn is_important_symbol(symbol: &Symbol) -> bool {
+    match &symbol.kind {
+        SymbolKind::Struct { .. }
+        | SymbolKind::Enum { .. }
+        | SymbolKind::Trait { .. }
+        | SymbolKind::TypeAlias { .. } => true,
+        SymbolKind::Function { .. } => {
+            symbol.visibility == Visibility::Public || symbol.visibility == Visibility::PubCrate
+        }
+        SymbolKind::Const { .. } | SymbolKind::Static { .. } => {
+            symbol.visibility == Visibility::Public
+        }
+        SymbolKind::Mod => symbol.visibility == Visibility::Public,
+    }
 }
 
 fn write_external_impl_summary(

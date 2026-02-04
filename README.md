@@ -60,9 +60,9 @@ Outputs structural context to stdout. Three tiers control verbosity:
 
 | Tier | Contents | Use when |
 |------|----------|----------|
-| `quick` | overview.md only | Just need orientation |
-| `default` | overview + symbols + types + dependents | Normal usage |
-| `full` | Everything | Deep refactoring, cross-cutting changes |
+| `quick` | overview + types + hotspots | Orientation and API surface |
+| `default` | quick + dependents + clusters + calls | Normal usage |
+| `full` | default + symbols + dataflow + manifest + safety + errors | Deep analysis |
 
 ```bash
 charter read          # default tier
@@ -327,15 +327,15 @@ Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
 
 This project uses charter for structural context. If you've lost track of the codebase:
 
-- `charter read quick` — Orientation only (~6k tokens)
-- `charter read` — Standard context (~40k tokens)
-- `charter read full` — Everything (~60k tokens)
+- `charter read quick` — API surface and complexity hotspots
+- `charter read` — Standard context with relationships
+- `charter read full` — Complete analysis
 
-Key files in .charter/:
-- `symbols.md` — All type/function signatures
-- `calls.md` — Who calls what (and reverse: what calls whom)
-- `clusters.md` — Semantically related functions
-- `dataflow.md` — Type producers/consumers
+High-value files in .charter/:
+- `types.md` — Trait definitions, impl map, derive map (best for understanding API)
+- `hotspots.md` — Complexity-ranked functions (where to focus attention)
+- `clusters.md` — Semantically related functions (what works together)
+- `calls.md` — Call graph with reverse lookup (who calls what)
 
 For specific lookups:
 - `charter lookup <Symbol>` — Full context for one symbol

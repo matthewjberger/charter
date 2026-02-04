@@ -699,6 +699,13 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
                 changed_files.as_ref(),
             )
             .await?;
+            println!();
+            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref())
+                .await?;
+            println!();
+            print_content_without_stamp(
+                &fs::read_to_string(charter_dir.join("hotspots.md")).await?,
+            );
         }
         Tier::Default => {
             print_filtered_overview_with_diff(
@@ -708,21 +715,24 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
             )
             .await?;
             println!();
-            print_filtered_symbols_with_diff(
-                &charter_dir.join("symbols.md"),
-                focus_normalized.as_deref(),
-                changed_files.as_ref(),
-            )
-            .await?;
-            println!();
             print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref())
                 .await?;
+            println!();
+            print_content_without_stamp(
+                &fs::read_to_string(charter_dir.join("hotspots.md")).await?,
+            );
             println!();
             print_filtered_dependents(
                 &charter_dir.join("dependents.md"),
                 focus_normalized.as_deref(),
             )
             .await?;
+            println!();
+            print_content_without_stamp(
+                &fs::read_to_string(charter_dir.join("clusters.md")).await?,
+            );
+            println!();
+            print_content_without_stamp(&fs::read_to_string(charter_dir.join("calls.md")).await?);
         }
         Tier::Full => {
             print_filtered_overview_with_diff(
@@ -732,15 +742,12 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
             )
             .await?;
             println!();
-            print_filtered_symbols_with_diff(
-                &charter_dir.join("symbols.md"),
-                focus_normalized.as_deref(),
-                changed_files.as_ref(),
-            )
-            .await?;
-            println!();
             print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref())
                 .await?;
+            println!();
+            print_content_without_stamp(
+                &fs::read_to_string(charter_dir.join("hotspots.md")).await?,
+            );
             println!();
             print_filtered_dependents(
                 &charter_dir.join("dependents.md"),
@@ -748,7 +755,22 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
             )
             .await?;
             println!();
-            print_filtered_refs(&charter_dir.join("refs.md"), focus_normalized.as_deref()).await?;
+            print_content_without_stamp(
+                &fs::read_to_string(charter_dir.join("clusters.md")).await?,
+            );
+            println!();
+            print_content_without_stamp(&fs::read_to_string(charter_dir.join("calls.md")).await?);
+            println!();
+            print_filtered_symbols_with_diff(
+                &charter_dir.join("symbols.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
+            println!();
+            print_content_without_stamp(
+                &fs::read_to_string(charter_dir.join("dataflow.md")).await?,
+            );
             println!();
             print_filtered_manifest_with_diff(
                 &charter_dir.join("manifest.md"),
@@ -756,6 +778,10 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
                 changed_files.as_ref(),
             )
             .await?;
+            println!();
+            print_content_without_stamp(&fs::read_to_string(charter_dir.join("safety.md")).await?);
+            println!();
+            print_content_without_stamp(&fs::read_to_string(charter_dir.join("errors.md")).await?);
         }
     }
 
@@ -2033,56 +2059,6 @@ async fn print_filtered_dependents(path: &Path, focus: Option<&str>) -> Result<(
             }
         } else if line.starts_with("  ") && header_printed {
             println!("{}", line);
-        }
-    }
-
-    Ok(())
-}
-
-async fn print_filtered_refs(path: &Path, focus: Option<&str>) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let content = fs::read_to_string(path).await?;
-
-    let Some(focus) = focus else {
-        print_content_without_stamp(&content);
-        return Ok(());
-    };
-
-    let mut skip_empty = true;
-    let mut header_printed = false;
-
-    for line in content.lines() {
-        if line.starts_with("[charter @") || line.starts_with("[charter |") {
-            continue;
-        }
-
-        if skip_empty && line.is_empty() {
-            continue;
-        }
-        skip_empty = false;
-
-        if line.contains(" — ") {
-            if let Some(refs_part) = line.split(" — ").nth(1) {
-                let mut has_focus_ref = false;
-                for ref_entry in refs_part.split(", ") {
-                    let file_part = ref_entry.split(':').next().unwrap_or("");
-                    if path_matches_focus(file_part, focus) {
-                        has_focus_ref = true;
-                        break;
-                    }
-                }
-                if has_focus_ref {
-                    if !header_printed {
-                        println!("# Cross-References (focused)");
-                        println!();
-                        header_printed = true;
-                    }
-                    println!("{}", line);
-                }
-            }
         }
     }
 
