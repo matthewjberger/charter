@@ -31,7 +31,7 @@ fn setup_fixture(fixture_path: &Path) {
 }
 
 fn run_charter(fixture_path: &Path) {
-    let charter = env!("CARGO_BIN_EXE_charter");
+    let charter = env!("CARGO_BIN_EXE_charter-cli");
     let output = Command::new(charter)
         .current_dir(fixture_path)
         .output()
@@ -45,7 +45,7 @@ fn run_charter(fixture_path: &Path) {
 }
 
 fn run_charter_command(fixture_path: &Path, args: &[&str]) -> (bool, String, String) {
-    let charter = env!("CARGO_BIN_EXE_charter");
+    let charter = env!("CARGO_BIN_EXE_charter-cli");
     let output = Command::new(charter)
         .args(args)
         .current_dir(fixture_path)
@@ -916,7 +916,7 @@ mod malformed_rust {
             let path = fixture_path();
             setup_fixture(&path);
 
-            let charter = env!("CARGO_BIN_EXE_charter");
+            let charter = env!("CARGO_BIN_EXE_charter-cli");
             let _ = Command::new(charter)
                 .current_dir(&path)
                 .output()

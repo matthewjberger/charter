@@ -14,8 +14,12 @@ keywords = ["rust", "ast", "parser", "llm", "context"]
 categories = ["development-tools", "command-line-utilities"]
 exclude = [".charter/", ".github/"]
 
-[[bin]]
+[lib]
 name = "charter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "charter-cli"
 path = "src/main.rs"
 
 [dependencies]

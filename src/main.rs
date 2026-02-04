@@ -1,18 +1,7 @@
-mod cache;
-mod cli;
-mod deps;
-mod detect;
-mod extract;
-mod git;
-mod output;
-mod pipeline;
-mod query;
-mod session;
-mod tests;
-
 use anyhow::Result;
+use charter::cli::{Cli, Commands, SessionAction};
+use charter::{deps, detect, output, pipeline, query, session, tests};
 use clap::Parser;
-use cli::{Cli, Commands, SessionAction};
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -22,8 +22,8 @@ pub struct CaptureRecord {
     pub files_changed: usize,
 }
 
-impl Session {
-    pub fn new() -> Self {
+impl Default for Session {
+    fn default() -> Self {
         Self {
             id: generate_session_id(),
             started_at: Utc::now(),
@@ -32,6 +32,12 @@ impl Session {
             modified_files: HashSet::new(),
             captures: Vec::new(),
         }
+    }
+}
+
+impl Session {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn is_active(&self) -> bool {
