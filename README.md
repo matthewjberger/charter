@@ -1,6 +1,12 @@
-# charter
+<h1 align="center">charter</h1>
 
-**Structural context for LLMs, in seconds.**
+<p align="center">
+  <a href="https://github.com/matthewjberger/charter"><img alt="github" src="https://img.shields.io/badge/github-matthewjberger/charter-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20"></a>
+  <a href="https://crates.io/crates/charter"><img alt="crates.io" src="https://img.shields.io/crates/v/charter.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20"></a>
+  <a href="https://github.com/matthewjberger/charter/blob/main/LICENSE-MIT"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=for-the-badge&labelColor=555555" height="20"></a>
+</p>
+
+<p align="center"><strong>Structural context for LLMs, in seconds.</strong></p>
 
 charter generates a `.charter/` directory containing token-dense structural context for Rust codebases. When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` dumps everything it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
 
