@@ -18,15 +18,41 @@ pub async fn find_project_root(path: Option<PathBuf>) -> Result<PathBuf> {
         .await
         .with_context(|| format!("Failed to canonicalize path: {}", start.display()))?;
 
-    if let Some(git_root) = find_git_root(&start).await {
-        return Ok(git_root);
+    if let Some(cargo_root) = find_cargo_root(&start).await {
+        return Ok(cargo_root);
     }
 
-    if has_cargo_toml(&start).await {
-        return Ok(start);
+    if let Some(git_root) = find_git_root(&start).await {
+        if has_cargo_toml(&git_root).await {
+            return Ok(git_root);
+        }
     }
 
     Ok(start)
+}
+
+async fn find_cargo_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    let mut deepest_cargo = None;
+
+    loop {
+        if has_cargo_toml(&current).await {
+            let cargo_path = current.join("Cargo.toml");
+            if let Ok(content) = fs::read_to_string(&cargo_path).await {
+                if content.contains("[workspace]") {
+                    return Some(current);
+                }
+                if deepest_cargo.is_none() {
+                    deepest_cargo = Some(current.clone());
+                }
+            }
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+
+    deepest_cargo
 }
 
 async fn find_git_root(start: &Path) -> Option<PathBuf> {

@@ -224,6 +224,24 @@ fn build_call_adjacency(result: &PipelineResult) -> HashMap<String, HashSet<Stri
     adjacency
 }
 
+fn extract_crate_module(file_path: &str) -> &str {
+    let normalized = file_path.replace('\\', "/");
+    let path = if normalized.starts_with("src/") {
+        &file_path[4..]
+    } else {
+        file_path
+    };
+
+    if let Some(slash_pos) = path.find('/') {
+        if let Some(second_slash) = path[slash_pos + 1..].find('/') {
+            return &path[..slash_pos + 1 + second_slash];
+        }
+        return &path[..slash_pos];
+    }
+
+    path
+}
+
 fn compute_affinity_matrix(
     functions: &[FunctionInfo],
     call_graph: &HashMap<String, HashSet<String>>,
@@ -238,11 +256,16 @@ fn compute_affinity_matrix(
 
             let mut score = 0i32;
 
-            if func_a.impl_type.is_some()
-                && func_a.impl_type == func_b.impl_type
-                && func_a.file == func_b.file
-            {
-                score += 10;
+            let same_crate =
+                extract_crate_module(&func_a.file) == extract_crate_module(&func_b.file);
+            let same_file = func_a.file == func_b.file;
+
+            if func_a.impl_type.is_some() && func_a.impl_type == func_b.impl_type {
+                if same_file {
+                    score += 15;
+                } else if same_crate {
+                    score += 5;
+                }
             }
 
             let name_a = qualified_name(func_a);
@@ -259,8 +282,12 @@ fn compute_affinity_matrix(
                 }
             }
 
-            if func_a.file == func_b.file {
-                score += 3;
+            if same_file {
+                score += 5;
+            } else if same_crate {
+                score += 2;
+            } else {
+                score -= 3;
             }
 
             let shared_types = count_shared_types(func_a, func_b);
@@ -360,7 +387,8 @@ fn cluster_functions(functions: &[FunctionInfo], affinity: &[Vec<i32>]) -> Vec<C
     let mut cluster_id: Vec<Option<usize>> = vec![None; len];
     let mut clusters: Vec<Cluster> = Vec::new();
 
-    const THRESHOLD: i32 = 8;
+    const THRESHOLD: i32 = 10;
+    const MAX_CLUSTER_SIZE: usize = 100;
 
     let mut pairs: Vec<(usize, usize, i32)> = Vec::new();
     for (index_a, row) in affinity.iter().enumerate() {
@@ -387,26 +415,33 @@ fn cluster_functions(functions: &[FunctionInfo], affinity: &[Vec<i32>]) -> Vec<C
                 });
             }
             (Some(id), None) => {
-                cluster_id[index_b] = Some(id);
-                clusters[id].functions.push(index_b);
+                if clusters[id].functions.len() < MAX_CLUSTER_SIZE {
+                    cluster_id[index_b] = Some(id);
+                    clusters[id].functions.push(index_b);
+                }
             }
             (None, Some(id)) => {
-                cluster_id[index_a] = Some(id);
-                clusters[id].functions.push(index_a);
+                if clusters[id].functions.len() < MAX_CLUSTER_SIZE {
+                    cluster_id[index_a] = Some(id);
+                    clusters[id].functions.push(index_a);
+                }
             }
             (Some(id_a), Some(id_b)) if id_a != id_b => {
-                if clusters[id_a].functions.len() >= clusters[id_b].functions.len() {
-                    for &func_idx in &clusters[id_b].functions.clone() {
-                        cluster_id[func_idx] = Some(id_a);
-                        clusters[id_a].functions.push(func_idx);
+                let combined_size = clusters[id_a].functions.len() + clusters[id_b].functions.len();
+                if combined_size <= MAX_CLUSTER_SIZE {
+                    if clusters[id_a].functions.len() >= clusters[id_b].functions.len() {
+                        for &func_idx in &clusters[id_b].functions.clone() {
+                            cluster_id[func_idx] = Some(id_a);
+                            clusters[id_a].functions.push(func_idx);
+                        }
+                        clusters[id_b].functions.clear();
+                    } else {
+                        for &func_idx in &clusters[id_a].functions.clone() {
+                            cluster_id[func_idx] = Some(id_b);
+                            clusters[id_b].functions.push(func_idx);
+                        }
+                        clusters[id_a].functions.clear();
                     }
-                    clusters[id_b].functions.clear();
-                } else {
-                    for &func_idx in &clusters[id_a].functions.clone() {
-                        cluster_id[func_idx] = Some(id_b);
-                        clusters[id_b].functions.push(func_idx);
-                    }
-                    clusters[id_a].functions.clear();
                 }
             }
             _ => {}
@@ -475,9 +510,6 @@ fn generate_cluster_label(
     }
 
     if let Some(file) = dominant_file {
-        let file_name = file.rsplit('/').next().unwrap_or(file);
-        let module_name = file_name.trim_end_matches(".rs");
-
         let file_count = cluster
             .functions
             .iter()
@@ -485,11 +517,100 @@ fn generate_cluster_label(
             .count();
 
         if file_count >= cluster.functions.len() / 2 {
-            return format!("{} operations", module_name);
+            return generate_file_based_label(file, functions, cluster);
         }
     }
 
-    "Related functions".to_string()
+    infer_label_from_function_names(functions, cluster)
+}
+
+fn generate_file_based_label(file: &str, functions: &[FunctionInfo], cluster: &Cluster) -> String {
+    let file_name = file.rsplit('/').next().unwrap_or(file);
+    let module_name = file_name.trim_end_matches(".rs");
+
+    let parent_dir = file
+        .rsplit_once('/')
+        .and_then(|(parent, _)| parent.rsplit('/').next())
+        .unwrap_or("");
+
+    if !parent_dir.is_empty() && parent_dir != "src" {
+        return format!("{}/{}", parent_dir, module_name);
+    }
+
+    let common_prefix = find_common_function_prefix(functions, cluster);
+    if !common_prefix.is_empty() && common_prefix.len() >= 3 {
+        return common_prefix;
+    }
+
+    module_name.to_string()
+}
+
+fn find_common_function_prefix(functions: &[FunctionInfo], cluster: &Cluster) -> String {
+    let names: Vec<&str> = cluster
+        .functions
+        .iter()
+        .map(|&idx| functions[idx].name.as_str())
+        .collect();
+
+    if names.is_empty() {
+        return String::new();
+    }
+
+    let first = names[0];
+    let mut prefix_len = 0;
+
+    for char_idx in 0..first.len() {
+        let char_at_idx = first.chars().nth(char_idx);
+        let all_match = names
+            .iter()
+            .all(|name| name.chars().nth(char_idx) == char_at_idx);
+
+        if all_match {
+            prefix_len = char_idx + 1;
+        } else {
+            break;
+        }
+    }
+
+    let prefix = &first[..prefix_len];
+    prefix.trim_end_matches('_').to_string()
+}
+
+fn infer_label_from_function_names(functions: &[FunctionInfo], cluster: &Cluster) -> String {
+    let mut keyword_counts: HashMap<&str, usize> = HashMap::new();
+
+    for &func_idx in &cluster.functions {
+        let name = &functions[func_idx].name;
+        for keyword in extract_keywords(name) {
+            *keyword_counts.entry(keyword).or_insert(0) += 1;
+        }
+    }
+
+    keyword_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= cluster.functions.len() / 3)
+        .max_by_key(|(_, count)| *count)
+        .map(|(keyword, _)| keyword.to_string())
+        .unwrap_or_else(|| "Related functions".to_string())
+}
+
+fn extract_keywords(name: &str) -> Vec<&'static str> {
+    let lower = name.to_lowercase();
+    let mut keywords = Vec::new();
+
+    const KEYWORDS: &[&str] = &[
+        "parse", "extract", "write", "read", "build", "create", "find", "get", "set", "check",
+        "validate", "process", "handle", "format", "collect", "generate", "load", "save", "init",
+        "new", "update", "delete", "insert", "remove",
+    ];
+
+    for &kw in KEYWORDS {
+        if lower.contains(kw) {
+            keywords.push(kw);
+        }
+    }
+
+    keywords
 }
 
 fn count_internal_calls(

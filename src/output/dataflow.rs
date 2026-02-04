@@ -24,15 +24,10 @@ struct ConsumerInfo {
     line: usize,
 }
 
-struct FieldPattern {
-    struct_name: String,
-    field_name: String,
-    readers: Vec<AccessInfo>,
-    writers: Vec<AccessInfo>,
-}
-
-struct AccessInfo {
-    function: String,
+struct CrossModuleFlow {
+    from_module: String,
+    to_module: String,
+    types: Vec<String>,
 }
 
 pub async fn write_dataflow(
@@ -47,11 +42,11 @@ pub async fn write_dataflow(
     writer.write_all(b"\n\n").await?;
     writer.write_all(b"# Data Flow\n\n").await?;
     writer
-        .write_all(b"Type flows and field access patterns across the codebase.\n\n")
+        .write_all(b"Type flows and cross-module connections.\n\n")
         .await?;
 
     let type_flows = build_type_flows(result);
-    let field_patterns = build_field_patterns(result);
+    let cross_module_flows = build_cross_module_flows(result);
 
     if !type_flows.is_empty() {
         writer.write_all(b"## Type Flows\n\n").await?;
@@ -119,88 +114,29 @@ pub async fn write_dataflow(
         }
     }
 
-    if !field_patterns.is_empty() {
-        writer.write_all(b"## Field Access Patterns\n\n").await?;
+    if !cross_module_flows.is_empty() {
+        writer.write_all(b"## Cross-Module Type Flows\n\n").await?;
         writer
-            .write_all(b"Which functions read/write specific struct fields.\n\n")
+            .write_all(b"Types flowing between modules (shared types suggest coupling).\n\n")
             .await?;
 
-        let mut struct_groups: HashMap<&str, Vec<&FieldPattern>> = HashMap::new();
-        for pattern in &field_patterns {
-            struct_groups
-                .entry(&pattern.struct_name)
-                .or_default()
-                .push(pattern);
-        }
+        for flow in cross_module_flows.iter().take(25) {
+            let header = format!("{} → {}\n", flow.from_module, flow.to_module);
+            writer.write_all(header.as_bytes()).await?;
 
-        let mut structs: Vec<&str> = struct_groups.keys().copied().collect();
-        structs.sort();
+            let types_str = if flow.types.len() <= 4 {
+                flow.types.join(", ")
+            } else {
+                let shown: Vec<&str> = flow.types.iter().take(3).map(|s| s.as_str()).collect();
+                format!("{} [+{} more]", shown.join(", "), flow.types.len() - 3)
+            };
 
-        for struct_name in structs.iter().take(20) {
-            let patterns = &struct_groups[struct_name];
-
-            let total_accesses: usize = patterns
-                .iter()
-                .map(|p| p.readers.len() + p.writers.len())
-                .sum();
-
-            if total_accesses < 3 {
-                continue;
-            }
-
-            let struct_header = format!("{}\n", struct_name);
-            writer.write_all(struct_header.as_bytes()).await?;
-
-            for pattern in patterns.iter().take(10) {
-                if pattern.readers.is_empty() && pattern.writers.is_empty() {
-                    continue;
-                }
-
-                let field_line = format!("  .{}\n", pattern.field_name);
-                writer.write_all(field_line.as_bytes()).await?;
-
-                if !pattern.readers.is_empty() {
-                    let readers: Vec<String> = pattern
-                        .readers
-                        .iter()
-                        .take(3)
-                        .map(|r| r.function.clone())
-                        .collect();
-
-                    let more = if pattern.readers.len() > 3 {
-                        format!(" [+{} more]", pattern.readers.len() - 3)
-                    } else {
-                        String::new()
-                    };
-
-                    let line = format!("    read by: {}{}\n", readers.join(", "), more);
-                    writer.write_all(line.as_bytes()).await?;
-                }
-
-                if !pattern.writers.is_empty() {
-                    let writers: Vec<String> = pattern
-                        .writers
-                        .iter()
-                        .take(3)
-                        .map(|w| w.function.clone())
-                        .collect();
-
-                    let more = if pattern.writers.len() > 3 {
-                        format!(" [+{} more]", pattern.writers.len() - 3)
-                    } else {
-                        String::new()
-                    };
-
-                    let line = format!("    write by: {}{}\n", writers.join(", "), more);
-                    writer.write_all(line.as_bytes()).await?;
-                }
-            }
-
-            writer.write_all(b"\n").await?;
+            let line = format!("  via: {}\n\n", types_str);
+            writer.write_all(line.as_bytes()).await?;
         }
     }
 
-    if type_flows.is_empty() && field_patterns.is_empty() {
+    if type_flows.is_empty() && cross_module_flows.is_empty() {
         writer
             .write_all(b"No significant data flow patterns detected.\n")
             .await?;
@@ -369,62 +305,53 @@ fn parse_signature_types(signature: &str) -> (Option<String>, Vec<String>) {
     (return_type, param_types)
 }
 
-fn build_field_patterns(result: &PipelineResult) -> Vec<FieldPattern> {
-    let mut patterns: HashMap<(String, String), FieldPattern> = HashMap::new();
+fn build_cross_module_flows(result: &PipelineResult) -> Vec<CrossModuleFlow> {
+    let mut flows: Vec<CrossModuleFlow> = Vec::new();
 
-    let struct_fields: HashMap<String, Vec<String>> = result
+    let type_to_file: HashMap<String, String> = result
         .files
         .iter()
-        .flat_map(|f| &f.parsed.symbols.symbols)
-        .filter_map(|s| {
-            if let SymbolKind::Struct { fields } = &s.kind {
-                let field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-                Some((s.name.clone(), field_names))
-            } else {
-                None
-            }
+        .flat_map(|f| {
+            f.parsed
+                .symbols
+                .symbols
+                .iter()
+                .filter_map(|s| match &s.kind {
+                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
+                        Some((s.name.clone(), f.relative_path.clone()))
+                    }
+                    _ => None,
+                })
         })
         .collect();
 
+    let mut module_connections: HashMap<(String, String), HashSet<String>> = HashMap::new();
+
     for file_result in &result.files {
-        for call_info in &file_result.parsed.call_graph {
-            let function_name = call_info.caller.qualified_name();
+        let source_module = extract_module_name(&file_result.relative_path);
 
-            for (struct_name, fields) in &struct_fields {
-                for field_name in fields {
-                    let key = (struct_name.clone(), field_name.clone());
+        for symbol in &file_result.parsed.symbols.symbols {
+            if let SymbolKind::Function { signature, .. } = &symbol.kind {
+                let (return_type, param_types) = parse_signature_types(signature);
 
-                    if !patterns.contains_key(&key) {
-                        patterns.insert(
-                            key.clone(),
-                            FieldPattern {
-                                struct_name: struct_name.clone(),
-                                field_name: field_name.clone(),
-                                readers: Vec::new(),
-                                writers: Vec::new(),
-                            },
-                        );
+                if let Some(ref ret) = return_type {
+                    let base = extract_base_type(ret);
+                    if let Some(type_file) = type_to_file.get(&base) {
+                        let type_module = extract_module_name(type_file);
+                        if type_module != source_module && !is_common_type(&base) {
+                            let key = (source_module.clone(), type_module.clone());
+                            module_connections.entry(key).or_default().insert(base);
+                        }
                     }
                 }
-            }
 
-            for edge in &call_info.callees {
-                let target = &edge.target;
-
-                for (struct_name, fields) in &struct_fields {
-                    for field_name in fields {
-                        if target == field_name {
-                            let key = (struct_name.clone(), field_name.clone());
-
-                            if let Some(pattern) = patterns.get_mut(&key) {
-                                let accessor = AccessInfo {
-                                    function: function_name.clone(),
-                                };
-
-                                if !pattern.readers.iter().any(|r| r.function == function_name) {
-                                    pattern.readers.push(accessor);
-                                }
-                            }
+                for param in &param_types {
+                    let base = extract_base_type(param);
+                    if let Some(type_file) = type_to_file.get(&base) {
+                        let type_module = extract_module_name(type_file);
+                        if type_module != source_module && !is_common_type(&base) {
+                            let key = (type_module.clone(), source_module.clone());
+                            module_connections.entry(key).or_default().insert(base);
                         }
                     }
                 }
@@ -432,7 +359,31 @@ fn build_field_patterns(result: &PipelineResult) -> Vec<FieldPattern> {
         }
     }
 
-    patterns.into_values().collect()
+    for ((from_module, to_module), types) in module_connections {
+        if types.len() >= 2 {
+            flows.push(CrossModuleFlow {
+                from_module,
+                to_module,
+                types: types.into_iter().collect(),
+            });
+        }
+    }
+
+    flows.sort_by(|a, b| {
+        b.types
+            .len()
+            .cmp(&a.types.len())
+            .then_with(|| a.from_module.cmp(&b.from_module))
+    });
+
+    flows
+}
+
+fn extract_module_name(file_path: &str) -> String {
+    file_path
+        .trim_start_matches("src/")
+        .trim_end_matches(".rs")
+        .replace('/', "::")
 }
 
 fn extract_base_type(type_str: &str) -> String {
