@@ -8,12 +8,19 @@
 
 <p align="center"><strong>Structural context for LLMs, in seconds.</strong></p>
 
-charter generates a `.charter/` directory containing token-dense structural context for Rust codebases. When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` dumps everything it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
+<p align="center">
+  <code>cargo install charter</code>
+</p>
+
+charter generates a `.charter/` directory containing token-dense structural context for **Rust** codebases.
+
+When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` dumps everything it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
 
 ## Installation
 
 ```bash
-cargo install --path .
+cargo install charter        # from crates.io
+cargo install --path .       # from source
 ```
 
 ## Quick Start
@@ -154,7 +161,6 @@ Quick summary without dumping full context:
 
 ```
 $ charter status
-charter status
   files: 316
   lines: 89,421
   captured: 2025-01-31T14:23:07Z
@@ -310,9 +316,9 @@ High-churn files:
   main.rs, pipeline.rs, widgets.rs
 ```
 
-## CLAUDE.md Integration
+## LLM Integration
 
-Add this to your project's `CLAUDE.md`:
+Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
 
 ```markdown
 ## Codebase Context
