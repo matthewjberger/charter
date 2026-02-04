@@ -9,6 +9,13 @@ use crate::extract::errors::{
     ErrorInfo, ErrorOrigin, ErrorOriginKind, ErrorReturnType, PropagationPoint,
 };
 use crate::extract::imports::{ImportInfo, ReExport};
+use crate::extract::safety::{
+    AsyncFunction, AsyncInfo, AwaitPoint, BlockingCall, BorrowInfo, CfgBlock, ComplexBound,
+    DocInfo, FeatureFlagInfo, FeatureGate, FunctionLifetime, GatedSymbol, GenericConstraints,
+    ItemConstraints, ItemDoc, LifetimeInfo, PanicKind, PanicPoint, SafetyInfo, SpawnPoint,
+    SpawnType, StructLifetime, TestFunction, TestInfo, TestModule, TestedItem, TypeParam,
+    UnsafeBlock, UnsafeImpl, UnsafeOperation,
+};
 use crate::extract::symbols::{
     AssociatedType, BodySummary, EnumVariant, FileSymbols, FunctionBody, ImplMethod, InherentImpl,
     MacroInfo, StructField, Symbol, SymbolKind, TraitMethod, VariantPayload, Visibility,
@@ -38,6 +45,13 @@ pub struct ParsedFile {
     pub call_graph: Vec<CallInfo>,
     pub error_info: Vec<ErrorInfo>,
     pub captured_bodies: Vec<CapturedBody>,
+    pub safety: SafetyInfo,
+    pub lifetimes: LifetimeInfo,
+    pub async_info: AsyncInfo,
+    pub feature_flags: FeatureFlagInfo,
+    pub doc_info: DocInfo,
+    pub generic_constraints: GenericConstraints,
+    pub test_info: TestInfo,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -70,6 +84,13 @@ fn extract_from_tree(tree: &Tree, source: &str, file_path: &str) -> Result<Parse
     extract_items(&root, source_bytes, &mut result);
     extract_identifier_locations(&root, source_bytes, &mut result);
     extract_phase1_data(&root, source_bytes, file_path, &mut result);
+    extract_safety_info(&root, source_bytes, &mut result);
+    extract_lifetime_info(&root, source_bytes, &mut result);
+    extract_async_info(&root, source_bytes, &mut result);
+    extract_feature_flags(&root, source_bytes, &mut result);
+    extract_doc_comments(&root, source_bytes, &mut result);
+    extract_generic_constraints(&root, source_bytes, &mut result);
+    extract_test_info(&root, source_bytes, &mut result);
 
     Ok(result)
 }
@@ -1565,4 +1586,966 @@ fn is_trivial_call(name: &str) -> bool {
     let base = name.split("::").last().unwrap_or(name);
     let base = base.split('.').next_back().unwrap_or(base);
     TRIVIAL.contains(&base)
+}
+
+fn extract_safety_info(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    extract_unsafe_blocks(root, source, None, &mut result.safety);
+    extract_panic_points(root, source, None, &mut result.safety);
+    extract_unsafe_traits_and_impls(root, source, &mut result.safety);
+}
+
+fn extract_unsafe_blocks(
+    node: &Node,
+    source: &[u8],
+    containing_fn: Option<&str>,
+    safety: &mut SafetyInfo,
+) {
+    let current_fn = if node.kind() == "function_item" {
+        find_child_text(node, "identifier", source)
+    } else {
+        containing_fn.map(|s| s.to_string())
+    };
+
+    if node.kind() == "unsafe_block" {
+        let line = node.start_position().row + 1;
+        let mut operations = Vec::new();
+        collect_unsafe_operations(node, source, &mut operations);
+        safety.unsafe_blocks.push(UnsafeBlock {
+            line,
+            containing_function: current_fn.clone(),
+            operations,
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_unsafe_blocks(&child, source, current_fn.as_deref(), safety);
+    }
+}
+
+fn collect_unsafe_operations(node: &Node, source: &[u8], operations: &mut Vec<UnsafeOperation>) {
+    match node.kind() {
+        "dereference_expression" => {
+            let text = node_text(node, source);
+            if text.starts_with('*') {
+                operations.push(UnsafeOperation::RawPointerDeref);
+            }
+        }
+        "call_expression" => {
+            if let Some(func) = node.child_by_field_name("function") {
+                let text = node_text(&func, source);
+                if text.contains("::") && !text.starts_with("std::") && !text.starts_with("core::")
+                {
+                    operations.push(UnsafeOperation::UnsafeFunctionCall(text));
+                }
+            }
+        }
+        "field_expression" => {
+            let text = node_text(node, source);
+            if text.contains("union") {
+                operations.push(UnsafeOperation::UnionFieldAccess);
+            }
+        }
+        "asm_item" | "asm_block" => {
+            operations.push(UnsafeOperation::InlineAssembly);
+        }
+        "identifier" => {
+            let text = node_text(node, source);
+            if text.chars().all(|c| c.is_uppercase() || c == '_') && text.len() > 1 {
+                if let Some(parent) = node.parent() {
+                    if parent.kind() == "assignment_expression"
+                        || parent.kind() == "compound_assignment_expr"
+                    {
+                        operations.push(UnsafeOperation::MutableStaticAccess(text));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_unsafe_operations(&child, source, operations);
+    }
+}
+
+fn extract_panic_points(
+    node: &Node,
+    source: &[u8],
+    containing_fn: Option<&str>,
+    safety: &mut SafetyInfo,
+) {
+    let current_fn = if node.kind() == "function_item" {
+        find_child_text(node, "identifier", source)
+    } else {
+        containing_fn.map(|s| s.to_string())
+    };
+
+    let line = node.start_position().row + 1;
+
+    match node.kind() {
+        "call_expression" => {
+            if let Some(func) = node.child_by_field_name("function") {
+                let text = node_text(&func, source);
+                if text.ends_with(".unwrap") || text == "unwrap" {
+                    safety.panic_points.push(PanicPoint {
+                        line,
+                        kind: PanicKind::Unwrap,
+                        containing_function: current_fn.clone(),
+                        context: Some(node_text(node, source)),
+                    });
+                } else if text.ends_with(".expect") || text == "expect" {
+                    let msg = node
+                        .child_by_field_name("arguments")
+                        .and_then(|args| args.child(1))
+                        .map(|arg| node_text(&arg, source))
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string();
+                    safety.panic_points.push(PanicPoint {
+                        line,
+                        kind: PanicKind::Expect(msg),
+                        containing_function: current_fn.clone(),
+                        context: Some(node_text(node, source)),
+                    });
+                }
+            }
+        }
+        "macro_invocation" => {
+            let text = node_text(node, source);
+            let kind = if text.starts_with("panic!") {
+                Some(PanicKind::PanicMacro)
+            } else if text.starts_with("unreachable!") {
+                Some(PanicKind::UnreachableMacro)
+            } else if text.starts_with("todo!") {
+                Some(PanicKind::TodoMacro)
+            } else if text.starts_with("unimplemented!") {
+                Some(PanicKind::UnimplementedMacro)
+            } else if text.starts_with("assert!")
+                || text.starts_with("assert_eq!")
+                || text.starts_with("assert_ne!")
+            {
+                Some(PanicKind::Assert)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                safety.panic_points.push(PanicPoint {
+                    line,
+                    kind,
+                    containing_function: current_fn.clone(),
+                    context: Some(text),
+                });
+            }
+        }
+        "index_expression" => {
+            let text = node_text(node, source);
+            if !text.contains("get(") && !text.contains("get_mut(") {
+                safety.panic_points.push(PanicPoint {
+                    line,
+                    kind: PanicKind::IndexAccess,
+                    containing_function: current_fn.clone(),
+                    context: Some(text),
+                });
+            }
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_panic_points(&child, source, current_fn.as_deref(), safety);
+    }
+}
+
+fn extract_unsafe_traits_and_impls(root: &Node, source: &[u8], safety: &mut SafetyInfo) {
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "trait_item" => {
+                if has_modifier(&child, "unsafe") {
+                    if let Some(name) = find_child_text(&child, "type_identifier", source) {
+                        safety.unsafe_traits.push(name);
+                    }
+                }
+            }
+            "impl_item" => {
+                if has_modifier(&child, "unsafe") {
+                    let trait_name = child
+                        .child_by_field_name("trait")
+                        .map(|n| node_text(&n, source))
+                        .unwrap_or_default();
+                    let type_name = child
+                        .child_by_field_name("type")
+                        .map(|n| node_text(&n, source))
+                        .unwrap_or_default();
+                    let line = child.start_position().row + 1;
+                    safety.unsafe_impls.push(UnsafeImpl {
+                        trait_name,
+                        type_name,
+                        line,
+                    });
+                }
+            }
+            _ => extract_unsafe_traits_and_impls(&child, source, safety),
+        }
+    }
+}
+
+fn extract_lifetime_info(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    extract_struct_lifetimes(root, source, &mut result.lifetimes);
+    extract_function_lifetimes(root, source, None, &mut result.lifetimes);
+    extract_complex_bounds(root, source, &mut result.lifetimes);
+}
+
+fn extract_struct_lifetimes(node: &Node, source: &[u8], lifetimes: &mut LifetimeInfo) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "struct_item" || child.kind() == "enum_item" {
+            let name = find_child_text(&child, "type_identifier", source).unwrap_or_default();
+            let line = child.start_position().row + 1;
+            let generics = extract_generics(&child, source);
+
+            let mut found_lifetimes = Vec::new();
+            let mut has_static = false;
+
+            for segment in generics.split(['<', '>', ',']) {
+                let segment = segment.trim();
+                if segment.starts_with('\'') {
+                    if segment == "'static" {
+                        has_static = true;
+                    } else {
+                        found_lifetimes.push(segment.to_string());
+                    }
+                }
+            }
+
+            if !found_lifetimes.is_empty() || has_static {
+                lifetimes.struct_lifetimes.push(StructLifetime {
+                    type_name: name,
+                    line,
+                    lifetimes: found_lifetimes,
+                    has_static,
+                });
+            }
+        } else {
+            extract_struct_lifetimes(&child, source, lifetimes);
+        }
+    }
+}
+
+fn extract_function_lifetimes(
+    node: &Node,
+    source: &[u8],
+    impl_type: Option<&str>,
+    lifetimes: &mut LifetimeInfo,
+) {
+    let current_impl = if node.kind() == "impl_item" {
+        node.child_by_field_name("type")
+            .map(|n| node_text(&n, source))
+    } else {
+        impl_type.map(|s| s.to_string())
+    };
+
+    if node.kind() == "function_item" || node.kind() == "function_signature_item" {
+        let name = find_child_text(node, "identifier", source).unwrap_or_default();
+        let line = node.start_position().row + 1;
+        let generics = extract_generics(node, source);
+        let signature = extract_function_signature(node, source);
+
+        let mut found_lifetimes = Vec::new();
+        let mut has_static = false;
+        let mut borrows = Vec::new();
+
+        for segment in generics.split(['<', '>', ',']) {
+            let segment = segment.trim();
+            if segment.starts_with('\'') {
+                if segment == "'static" || segment.starts_with("'static") {
+                    has_static = true;
+                } else if !segment.contains(':') {
+                    found_lifetimes.push(segment.to_string());
+                }
+            }
+        }
+
+        for part in signature.split(',') {
+            let part = part.trim();
+            if part.contains('&') {
+                let is_mutable = part.contains("&mut");
+                let lifetime = if part.contains("&'") {
+                    part.split("&'").nth(1).map(|s| {
+                        let end = s
+                            .find(|c: char| !c.is_alphanumeric() && c != '_')
+                            .unwrap_or(s.len());
+                        format!("'{}", &s[..end])
+                    })
+                } else {
+                    None
+                };
+                let param_name = part.split(':').next().unwrap_or("").trim().to_string();
+                if !param_name.is_empty()
+                    && param_name != "self"
+                    && param_name != "&self"
+                    && param_name != "&mut self"
+                {
+                    borrows.push(BorrowInfo {
+                        param_name,
+                        is_mutable,
+                        lifetime,
+                    });
+                }
+            }
+        }
+
+        if !found_lifetimes.is_empty() || has_static || !borrows.is_empty() {
+            lifetimes.function_lifetimes.push(FunctionLifetime {
+                function_name: name,
+                impl_type: current_impl.clone(),
+                line,
+                lifetimes: found_lifetimes,
+                has_static,
+                borrows,
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_function_lifetimes(&child, source, current_impl.as_deref(), lifetimes);
+    }
+}
+
+fn extract_complex_bounds(root: &Node, source: &[u8], lifetimes: &mut LifetimeInfo) {
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "function_item" | "struct_item" | "enum_item" | "trait_item" | "impl_item" => {
+                if let Some(where_clause) = extract_where_clause(&child, source) {
+                    if where_clause.contains(':') {
+                        let name = find_child_text(&child, "identifier", source)
+                            .or_else(|| find_child_text(&child, "type_identifier", source))
+                            .unwrap_or_default();
+                        let line = child.start_position().row + 1;
+                        lifetimes.complex_bounds.push(ComplexBound {
+                            item_name: name,
+                            line,
+                            bounds: where_clause,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        extract_complex_bounds(&child, source, lifetimes);
+    }
+}
+
+fn extract_async_info(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    extract_async_functions(root, source, None, &mut result.async_info);
+    extract_blocking_calls(root, source, None, false, &mut result.async_info);
+}
+
+fn extract_async_functions(
+    node: &Node,
+    source: &[u8],
+    impl_type: Option<&str>,
+    async_info: &mut AsyncInfo,
+) {
+    let current_impl = if node.kind() == "impl_item" {
+        node.child_by_field_name("type")
+            .map(|n| node_text(&n, source))
+    } else {
+        impl_type.map(|s| s.to_string())
+    };
+
+    if node.kind() == "function_item" && has_modifier(node, "async") {
+        let name = find_child_text(node, "identifier", source).unwrap_or_default();
+        let line = node.start_position().row + 1;
+        let mut awaits = Vec::new();
+        let mut spawns = Vec::new();
+
+        if let Some(body) = node.child_by_field_name("body") {
+            collect_await_points(&body, source, &mut awaits);
+            collect_spawn_points(&body, source, &mut spawns);
+        }
+
+        async_info.async_functions.push(AsyncFunction {
+            name,
+            impl_type: current_impl.clone(),
+            line,
+            awaits,
+            spawns,
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_async_functions(&child, source, current_impl.as_deref(), async_info);
+    }
+}
+
+fn collect_await_points(node: &Node, source: &[u8], awaits: &mut Vec<AwaitPoint>) {
+    if node.kind() == "await_expression" {
+        let line = node.start_position().row + 1;
+        let expression = node_text(node, source);
+        awaits.push(AwaitPoint { line, expression });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_await_points(&child, source, awaits);
+    }
+}
+
+fn collect_spawn_points(node: &Node, source: &[u8], spawns: &mut Vec<SpawnPoint>) {
+    if node.kind() == "call_expression" {
+        let text = node_text(node, source);
+        let line = node.start_position().row + 1;
+
+        let spawn_type = if text.contains("tokio::spawn")
+            || text.contains("spawn(") && text.contains("tokio")
+        {
+            Some(SpawnType::TokioSpawn)
+        } else if text.contains("spawn_blocking") {
+            Some(SpawnType::TokioSpawnBlocking)
+        } else if text.contains("async_std::task::spawn") {
+            Some(SpawnType::AsyncStdSpawn)
+        } else if text.contains("spawn") && (text.contains("task") || text.contains("runtime")) {
+            Some(SpawnType::Other(text.clone()))
+        } else {
+            None
+        };
+
+        if let Some(spawn_type) = spawn_type {
+            spawns.push(SpawnPoint { line, spawn_type });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_spawn_points(&child, source, spawns);
+    }
+}
+
+fn extract_blocking_calls(
+    node: &Node,
+    source: &[u8],
+    containing_fn: Option<&str>,
+    in_async: bool,
+    async_info: &mut AsyncInfo,
+) {
+    let (current_fn, current_async) = if node.kind() == "function_item" {
+        let name = find_child_text(node, "identifier", source);
+        let is_async = has_modifier(node, "async");
+        (name, is_async)
+    } else {
+        (containing_fn.map(|s| s.to_string()), in_async)
+    };
+
+    if node.kind() == "call_expression" {
+        let text = node_text(node, source);
+        let line = node.start_position().row + 1;
+
+        const BLOCKING_CALLS: &[&str] = &[
+            "std::fs::",
+            "std::io::",
+            "std::net::",
+            "std::thread::sleep",
+            "thread::sleep",
+            ".read(",
+            ".write(",
+            ".read_to_string",
+            ".read_to_end",
+            "File::open",
+            "File::create",
+        ];
+
+        for pattern in BLOCKING_CALLS {
+            if text.contains(pattern) {
+                async_info.blocking_calls.push(BlockingCall {
+                    line,
+                    call: text.clone(),
+                    in_async_context: current_async,
+                    containing_function: current_fn.clone(),
+                });
+                break;
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        extract_blocking_calls(
+            &child,
+            source,
+            current_fn.as_deref(),
+            current_async,
+            async_info,
+        );
+    }
+}
+
+fn extract_feature_flags(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    let mut feature_map: std::collections::HashMap<String, Vec<GatedSymbol>> =
+        std::collections::HashMap::new();
+
+    collect_feature_gated_items(
+        root,
+        source,
+        &mut feature_map,
+        &mut result.feature_flags.cfg_blocks,
+    );
+
+    for (feature_name, symbols) in feature_map {
+        result.feature_flags.feature_gates.push(FeatureGate {
+            feature_name,
+            symbols,
+        });
+    }
+}
+
+fn collect_feature_gated_items(
+    node: &Node,
+    source: &[u8],
+    feature_map: &mut std::collections::HashMap<String, Vec<GatedSymbol>>,
+    cfg_blocks: &mut Vec<CfgBlock>,
+) {
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+
+    let mut index = 0;
+    while index < children.len() {
+        let child = &children[index];
+
+        if child.kind() == "attribute_item" {
+            let text = node_text(child, source);
+
+            if text.contains("#[cfg(feature") {
+                if let Some(feature) = extract_feature_name(&text) {
+                    if index + 1 < children.len() {
+                        let next = &children[index + 1];
+                        let (name, kind) = get_item_name_and_kind(next, source);
+                        if !name.is_empty() {
+                            let line = next.start_position().row + 1;
+                            feature_map.entry(feature).or_default().push(GatedSymbol {
+                                name,
+                                kind,
+                                line,
+                            });
+                        }
+                    }
+                }
+            } else if text.contains("#[cfg(") {
+                if let Some(condition) = extract_cfg_condition(&text) {
+                    let line = child.start_position().row + 1;
+                    let mut affected_items = Vec::new();
+
+                    if index + 1 < children.len() {
+                        let next = &children[index + 1];
+                        let (name, _) = get_item_name_and_kind(next, source);
+                        if !name.is_empty() {
+                            affected_items.push(name);
+                        }
+                    }
+
+                    cfg_blocks.push(CfgBlock {
+                        condition,
+                        line,
+                        affected_items,
+                    });
+                }
+            }
+        }
+
+        collect_feature_gated_items(child, source, feature_map, cfg_blocks);
+        index += 1;
+    }
+}
+
+fn extract_feature_name(attr_text: &str) -> Option<String> {
+    let start = attr_text.find("feature = \"")?;
+    let rest = &attr_text[start + 11..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn extract_cfg_condition(attr_text: &str) -> Option<String> {
+    let start = attr_text.find("#[cfg(")?;
+    let rest = &attr_text[start + 6..];
+    let end = rest.rfind(")]")?;
+    Some(rest[..end].to_string())
+}
+
+fn get_item_name_and_kind(node: &Node, source: &[u8]) -> (String, String) {
+    let kind = match node.kind() {
+        "function_item" => "fn",
+        "struct_item" => "struct",
+        "enum_item" => "enum",
+        "trait_item" => "trait",
+        "impl_item" => "impl",
+        "const_item" => "const",
+        "static_item" => "static",
+        "type_item" => "type",
+        "mod_item" => "mod",
+        "macro_definition" => "macro",
+        _ => return (String::new(), String::new()),
+    };
+
+    let name = find_child_text(node, "identifier", source)
+        .or_else(|| find_child_text(node, "type_identifier", source))
+        .unwrap_or_default();
+
+    (name, kind.to_string())
+}
+
+fn extract_doc_comments(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    collect_item_docs(root, source, &mut result.doc_info.item_docs);
+}
+
+fn collect_item_docs(node: &Node, source: &[u8], docs: &mut Vec<ItemDoc>) {
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+
+    let mut index = 0;
+    while index < children.len() {
+        let child = &children[index];
+
+        if child.kind() == "line_comment" || child.kind() == "block_comment" {
+            let text = node_text(child, source);
+
+            if text.starts_with("///") || text.starts_with("/**") {
+                let mut doc_lines = Vec::new();
+                let mut doc_index = index;
+
+                while doc_index < children.len() {
+                    let doc_node = &children[doc_index];
+                    let doc_text = node_text(doc_node, source);
+
+                    if doc_text.starts_with("///") {
+                        doc_lines.push(
+                            doc_text
+                                .strip_prefix("///")
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                        );
+                        doc_index += 1;
+                    } else if doc_text.starts_with("/**") {
+                        let content = doc_text
+                            .strip_prefix("/**")
+                            .and_then(|s| s.strip_suffix("*/"))
+                            .unwrap_or("");
+                        doc_lines.push(content.trim().to_string());
+                        doc_index += 1;
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+
+                if doc_index < children.len() {
+                    let item = &children[doc_index];
+                    let (name, kind) = get_item_name_and_kind(item, source);
+
+                    if !name.is_empty() {
+                        let full_doc = doc_lines.join(" ");
+                        let summary = full_doc
+                            .split('.')
+                            .next()
+                            .unwrap_or(&full_doc)
+                            .trim()
+                            .to_string();
+                        let line = item.start_position().row + 1;
+
+                        docs.push(ItemDoc {
+                            item_name: name,
+                            item_kind: kind,
+                            line,
+                            summary,
+                            has_examples: full_doc.contains("# Example")
+                                || full_doc.contains("```"),
+                            has_panics_section: full_doc.contains("# Panic"),
+                            has_safety_section: full_doc.contains("# Safety"),
+                            has_errors_section: full_doc.contains("# Error"),
+                        });
+                    }
+                }
+
+                index = doc_index;
+                continue;
+            }
+        }
+
+        collect_item_docs(child, source, docs);
+        index += 1;
+    }
+}
+
+fn extract_generic_constraints(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    collect_generic_constraints(root, source, &mut result.generic_constraints.constraints);
+}
+
+fn collect_generic_constraints(node: &Node, source: &[u8], constraints: &mut Vec<ItemConstraints>) {
+    match node.kind() {
+        "function_item" | "struct_item" | "enum_item" | "trait_item" | "impl_item" => {
+            let (name, kind) = get_item_name_and_kind(node, source);
+            let line = node.start_position().row + 1;
+            let generics = extract_generics(node, source);
+            let where_clause = extract_where_clause(node, source);
+
+            if !generics.is_empty() || where_clause.is_some() {
+                let type_params = parse_type_params(&generics);
+
+                if !type_params.is_empty() || where_clause.is_some() {
+                    constraints.push(ItemConstraints {
+                        item_name: name,
+                        item_kind: kind,
+                        line,
+                        type_params,
+                        where_clause,
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_generic_constraints(&child, source, constraints);
+    }
+}
+
+fn parse_type_params(generics: &str) -> Vec<TypeParam> {
+    let mut params = Vec::new();
+    let content = generics.trim_start_matches('<').trim_end_matches('>');
+
+    let mut depth = 0;
+    let mut current_param = String::new();
+
+    for c in content.chars() {
+        match c {
+            '<' => {
+                depth += 1;
+                current_param.push(c);
+            }
+            '>' => {
+                depth -= 1;
+                current_param.push(c);
+            }
+            ',' if depth == 0 => {
+                if let Some(param) = parse_single_type_param(&current_param) {
+                    params.push(param);
+                }
+                current_param.clear();
+            }
+            _ => current_param.push(c),
+        }
+    }
+
+    if let Some(param) = parse_single_type_param(&current_param) {
+        params.push(param);
+    }
+
+    params
+}
+
+fn parse_single_type_param(param: &str) -> Option<TypeParam> {
+    let param = param.trim();
+    if param.is_empty() || param.starts_with('\'') {
+        return None;
+    }
+
+    let parts: Vec<&str> = param.splitn(2, ':').collect();
+    let name = parts[0].trim().to_string();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    let bounds = if parts.len() > 1 {
+        parts[1]
+            .split('+')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Some(TypeParam { name, bounds })
+}
+
+fn extract_test_info(root: &Node, source: &[u8], result: &mut ParsedFile) {
+    collect_test_functions(root, source, &mut result.test_info);
+    collect_test_modules(root, source, &mut result.test_info);
+    infer_tested_items(&mut result.test_info);
+}
+
+fn collect_test_functions(node: &Node, source: &[u8], test_info: &mut TestInfo) {
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+
+    for index in 0..children.len() {
+        let child = &children[index];
+
+        if child.kind() == "function_item" {
+            let mut is_test = false;
+            let mut is_ignored = false;
+            let mut should_panic = false;
+            let is_async = has_modifier(child, "async");
+
+            for prev_index in (0..index).rev() {
+                let prev = &children[prev_index];
+                if prev.kind() != "attribute_item" {
+                    break;
+                }
+                let attr_text = node_text(prev, source);
+                if attr_text.contains("#[test]")
+                    || attr_text.contains("#[tokio::test")
+                    || attr_text.contains("#[async_std::test")
+                {
+                    is_test = true;
+                }
+                if attr_text.contains("#[ignore") {
+                    is_ignored = true;
+                }
+                if attr_text.contains("#[should_panic") {
+                    should_panic = true;
+                }
+            }
+
+            if is_test {
+                let name = find_child_text(child, "identifier", source).unwrap_or_default();
+                let line = child.start_position().row + 1;
+                let tested_function = infer_tested_function(&name);
+
+                test_info.test_functions.push(TestFunction {
+                    name,
+                    line,
+                    is_async,
+                    is_ignored,
+                    should_panic,
+                    tested_function,
+                });
+            }
+        }
+
+        collect_test_functions(child, source, test_info);
+    }
+}
+
+fn collect_test_modules(node: &Node, source: &[u8], test_info: &mut TestInfo) {
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.children(&mut cursor).collect();
+
+    for index in 0..children.len() {
+        let child = &children[index];
+
+        if child.kind() == "mod_item" {
+            let name = find_child_text(child, "identifier", source).unwrap_or_default();
+
+            let mut is_test_mod = name == "tests" || name == "test";
+
+            for prev_index in (0..index).rev() {
+                let prev = &children[prev_index];
+                if prev.kind() != "attribute_item" {
+                    break;
+                }
+                let attr_text = node_text(prev, source);
+                if attr_text.contains("#[cfg(test)]") {
+                    is_test_mod = true;
+                    break;
+                }
+            }
+
+            if is_test_mod {
+                let line = child.start_position().row + 1;
+                let test_count = count_tests_in_module(child, source);
+                test_info.test_modules.push(TestModule {
+                    name,
+                    line,
+                    test_count,
+                });
+            }
+        }
+
+        collect_test_modules(child, source, test_info);
+    }
+}
+
+fn count_tests_in_module(node: &Node, source: &[u8]) -> usize {
+    let mut count = 0;
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        if child.kind() == "attribute_item" {
+            let text = node_text(&child, source);
+            if text.contains("#[test]")
+                || text.contains("#[tokio::test")
+                || text.contains("#[async_std::test")
+            {
+                count += 1;
+            }
+        }
+        count += count_tests_in_module(&child, source);
+    }
+
+    count
+}
+
+fn infer_tested_function(test_name: &str) -> Option<String> {
+    let name = test_name.strip_prefix("test_")?;
+
+    if name.ends_with("_works") || name.ends_with("_succeeds") || name.ends_with("_success") {
+        let base = name
+            .strip_suffix("_works")
+            .or_else(|| name.strip_suffix("_succeeds"))
+            .or_else(|| name.strip_suffix("_success"))
+            .unwrap_or(name);
+        return Some(base.to_string());
+    }
+
+    if name.ends_with("_fails") || name.ends_with("_error") || name.ends_with("_panics") {
+        let base = name
+            .strip_suffix("_fails")
+            .or_else(|| name.strip_suffix("_error"))
+            .or_else(|| name.strip_suffix("_panics"))
+            .unwrap_or(name);
+        return Some(base.to_string());
+    }
+
+    Some(name.to_string())
+}
+
+fn infer_tested_items(test_info: &mut TestInfo) {
+    let mut item_tests: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for test in &test_info.test_functions {
+        if let Some(ref tested) = test.tested_function {
+            item_tests
+                .entry(tested.clone())
+                .or_default()
+                .push(test.name.clone());
+        }
+    }
+
+    for (item_name, test_names) in item_tests {
+        let coverage_hints = if test_names
+            .iter()
+            .any(|n| n.contains("error") || n.contains("fail"))
+        {
+            vec!["error path".to_string()]
+        } else {
+            vec![]
+        };
+
+        test_info.tested_items.push(TestedItem {
+            item_name,
+            test_names,
+            coverage_hints,
+        });
+    }
 }

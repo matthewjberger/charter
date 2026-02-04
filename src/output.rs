@@ -6,6 +6,7 @@ pub mod manifest;
 pub mod overview;
 pub mod preamble;
 pub mod refs;
+pub mod safety;
 pub mod skipped;
 pub mod snippets;
 pub mod symbols;

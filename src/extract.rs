@@ -3,4 +3,5 @@ pub mod calls;
 pub mod complexity;
 pub mod errors;
 pub mod imports;
+pub mod safety;
 pub mod symbols;

@@ -34,6 +34,24 @@ pub async fn query(root: &Path, query_str: &str, limit: usize) -> Result<()> {
         QueryType::PublicApi => {
             find_public_api(&atlas_dir, limit).await?;
         }
+        QueryType::Panics => {
+            find_panics(&atlas_dir, limit).await?;
+        }
+        QueryType::PanicsIn { file } => {
+            find_panics_in(&atlas_dir, &file, limit).await?;
+        }
+        QueryType::UnsafeCode => {
+            find_unsafe_code(&atlas_dir, limit).await?;
+        }
+        QueryType::AsyncFunctions => {
+            find_async_functions(&atlas_dir, limit).await?;
+        }
+        QueryType::Lifetimes => {
+            find_lifetimes(&atlas_dir, limit).await?;
+        }
+        QueryType::Tests => {
+            find_tests(&atlas_dir, limit).await?;
+        }
         QueryType::Keyword { terms } => {
             keyword_search(&atlas_dir, &terms, limit).await?;
         }
@@ -50,6 +68,12 @@ enum QueryType {
     ErrorsIn { file: String },
     Hotspots,
     PublicApi,
+    Panics,
+    PanicsIn { file: String },
+    UnsafeCode,
+    AsyncFunctions,
+    Lifetimes,
+    Tests,
     Keyword { terms: Vec<String> },
 }
 
@@ -98,6 +122,31 @@ fn parse_query(query: &str) -> QueryType {
     if query_lower == "public api" || query_lower == "public functions" || query_lower == "exports"
     {
         return QueryType::PublicApi;
+    }
+
+    if query_lower == "panics" || query_lower == "panic points" || query_lower == "unwraps" {
+        return QueryType::Panics;
+    }
+
+    if query_lower.starts_with("panics in ") {
+        let file = query[10..].trim().to_string();
+        return QueryType::PanicsIn { file };
+    }
+
+    if query_lower == "unsafe" || query_lower == "unsafe code" || query_lower == "unsafe blocks" {
+        return QueryType::UnsafeCode;
+    }
+
+    if query_lower == "async" || query_lower == "async functions" || query_lower == "async fns" {
+        return QueryType::AsyncFunctions;
+    }
+
+    if query_lower == "lifetimes" || query_lower == "lifetime" || query_lower == "borrows" {
+        return QueryType::Lifetimes;
+    }
+
+    if query_lower == "tests" || query_lower == "test functions" || query_lower == "test coverage" {
+        return QueryType::Tests;
     }
 
     let terms: Vec<String> = query
@@ -448,6 +497,11 @@ fn search_in_content(
                 if line.trim().to_lowercase().starts_with(term) {
                     score += 0.5;
                 }
+            } else {
+                let fuzzy_score = fuzzy_match(&line_lower, term);
+                if fuzzy_score > 0.7 {
+                    score += fuzzy_score;
+                }
             }
         }
 
@@ -458,4 +512,295 @@ fn search_in_content(
             }
         }
     }
+}
+
+fn fuzzy_match(text: &str, pattern: &str) -> f32 {
+    if text.contains(pattern) {
+        return 1.0;
+    }
+
+    let words: Vec<&str> = text
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .collect();
+
+    for word in &words {
+        if word.len() >= pattern.len() {
+            let distance = levenshtein_distance(word, pattern);
+            let max_len = word.len().max(pattern.len());
+            let similarity = 1.0 - (distance as f32 / max_len as f32);
+            if similarity > 0.7 {
+                return similarity;
+            }
+        }
+    }
+
+    0.0
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let a_len = a_chars.len();
+    let b_len = b_chars.len();
+
+    if a_len == 0 {
+        return b_len;
+    }
+    if b_len == 0 {
+        return a_len;
+    }
+
+    let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
+
+    for (index, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
+        row[0] = index;
+    }
+    for (index, value) in matrix[0].iter_mut().enumerate().take(b_len + 1) {
+        *value = index;
+    }
+
+    for i in 1..=a_len {
+        for j in 1..=b_len {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            matrix[i][j] = (matrix[i - 1][j] + 1)
+                .min(matrix[i][j - 1] + 1)
+                .min(matrix[i - 1][j - 1] + cost);
+        }
+    }
+
+    matrix[a_len][b_len]
+}
+
+async fn find_panics(atlas_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+
+    println!("Panic Points (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+    let mut in_panics = false;
+
+    for line in content.lines() {
+        if line == "## Panic Points" {
+            in_panics = true;
+            continue;
+        }
+
+        if in_panics {
+            if line.starts_with("## ") && line != "## Panic Points" {
+                break;
+            }
+
+            if line.contains(":")
+                && (line.contains(".unwrap()")
+                    || line.contains(".expect(")
+                    || line.contains("panic!")
+                    || line.contains("L") && line.contains("in "))
+            {
+                println!("  {}", line.trim());
+                found += 1;
+                if found >= limit {
+                    break;
+                }
+            } else if line.starts_with("Summary:")
+                || line.starts_with("  .unwrap")
+                || line.starts_with("  index")
+                || line.starts_with("  panic")
+                || line.starts_with("  assert")
+            {
+                println!("{}", line);
+            }
+        }
+    }
+
+    if found == 0 {
+        println!("  No panic points found (run 'atlas' to generate safety.md)");
+    }
+
+    Ok(())
+}
+
+async fn find_panics_in(atlas_dir: &Path, file: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+
+    println!("Panic Points in '{}':", file);
+    println!();
+
+    let file_lower = file.to_lowercase();
+    let mut found = 0;
+
+    for line in content.lines() {
+        let matches_file = line.contains(&file_lower)
+            || (line.contains(":") && line.to_lowercase().contains(&file_lower));
+        let is_panic_line = line.contains(".unwrap()")
+            || line.contains(".expect(")
+            || line.contains("panic!")
+            || line.contains(" in ");
+
+        if matches_file && is_panic_line {
+            println!("  {}", line.trim());
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+    }
+
+    if found == 0 {
+        println!("  No panic points found in '{}'", file);
+    }
+
+    Ok(())
+}
+
+async fn find_unsafe_code(atlas_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+
+    println!("Unsafe Code (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+    let mut in_unsafe = false;
+
+    for line in content.lines() {
+        if line == "## Unsafe Blocks" || line == "## Unsafe Code" {
+            in_unsafe = true;
+            continue;
+        }
+
+        if in_unsafe {
+            if line.starts_with("## ") {
+                break;
+            }
+
+            if !line.is_empty() && !line.starts_with('#') {
+                println!("  {}", line.trim());
+                found += 1;
+                if found >= limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    if found == 0 {
+        println!("  No unsafe blocks found");
+    }
+
+    Ok(())
+}
+
+async fn find_async_functions(atlas_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+
+    println!("Async Analysis (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+    let mut in_async = false;
+
+    for line in content.lines() {
+        if line == "## Async Analysis" {
+            in_async = true;
+            continue;
+        }
+
+        if in_async {
+            if line.starts_with("## ") && line != "## Async Analysis" {
+                break;
+            }
+
+            if !line.is_empty() {
+                println!("{}", line);
+                found += 1;
+                if found >= limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    if found == 0 {
+        println!("  No async analysis found");
+    }
+
+    Ok(())
+}
+
+async fn find_lifetimes(atlas_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+
+    println!("Lifetime Analysis (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+    let mut in_lifetimes = false;
+
+    for line in content.lines() {
+        if line == "## Lifetime Analysis" {
+            in_lifetimes = true;
+            continue;
+        }
+
+        if in_lifetimes {
+            if line.starts_with("## ") && line != "## Lifetime Analysis" {
+                break;
+            }
+
+            if !line.is_empty() {
+                println!("{}", line);
+                found += 1;
+                if found >= limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    if found == 0 {
+        println!("  No lifetime information found");
+    }
+
+    Ok(())
+}
+
+async fn find_tests(atlas_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+
+    println!("Test Coverage (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+    let mut in_tests = false;
+
+    for line in content.lines() {
+        if line == "## Test Coverage" {
+            in_tests = true;
+            continue;
+        }
+
+        if in_tests {
+            if line.starts_with("## ") && line != "## Test Coverage" {
+                break;
+            }
+
+            if !line.is_empty() {
+                println!("{}", line);
+                found += 1;
+                if found >= limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    if found == 0 {
+        println!("  No test coverage information found");
+    }
+
+    Ok(())
 }
