@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "atlas",
+    name = "charter",
     about = "Fast structural context generator for Rust codebases"
 )]
 pub struct Cli {
@@ -35,7 +35,7 @@ pub enum Commands {
         #[arg(help = "Project root (default: auto-detect from cwd)")]
         path: Option<PathBuf>,
     },
-    #[command(about = "Look up a single symbol across all atlas data")]
+    #[command(about = "Look up a single symbol across all charter data")]
     Lookup {
         #[arg(help = "Symbol name to look up")]
         symbol: String,

@@ -10,11 +10,11 @@ const MAX_SYMBOLS: usize = 300;
 const MIN_FILES_THRESHOLD: usize = 2;
 
 pub async fn write_refs(
-    atlas_dir: &Path,
+    charter_dir: &Path,
     references: &HashMap<String, Vec<(String, usize)>>,
     stamp: &str,
 ) -> Result<()> {
-    let path = atlas_dir.join("refs.md");
+    let path = charter_dir.join("refs.md");
     let mut file = File::create(&path).await?;
 
     let mut buffer = Vec::with_capacity(64 * 1024);

@@ -132,23 +132,23 @@ pub(crate) fn churn_label(count: u32, high_threshold: u32, med_threshold: u32) -
 }
 
 pub async fn lookup(root: &Path, symbol: &str) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
-    let symbols_content = fs::read_to_string(atlas_dir.join("symbols.md"))
+    let symbols_content = fs::read_to_string(charter_dir.join("symbols.md"))
         .await
         .unwrap_or_default();
-    let types_content = fs::read_to_string(atlas_dir.join("types.md"))
+    let types_content = fs::read_to_string(charter_dir.join("types.md"))
         .await
         .unwrap_or_default();
-    let refs_content = fs::read_to_string(atlas_dir.join("refs.md"))
+    let refs_content = fs::read_to_string(charter_dir.join("refs.md"))
         .await
         .unwrap_or_default();
-    let dependents_content = fs::read_to_string(atlas_dir.join("dependents.md"))
+    let dependents_content = fs::read_to_string(charter_dir.join("dependents.md"))
         .await
         .unwrap_or_default();
 
@@ -630,10 +630,10 @@ fn print_lookup_result(results: &LookupResult) {
 }
 
 pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&str>) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
@@ -682,7 +682,7 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
     let focus_normalized = focus.map(normalize_focus_path);
 
     if let Some(ref focus_path) = focus_normalized {
-        check_focus_matches(&atlas_dir, focus_path).await;
+        check_focus_matches(&charter_dir, focus_path).await;
     }
 
     let preamble =
@@ -694,7 +694,7 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
     match tier {
         Tier::Quick => {
             print_filtered_overview_with_diff(
-                &atlas_dir.join("overview.md"),
+                &charter_dir.join("overview.md"),
                 focus_normalized.as_deref(),
                 changed_files.as_ref(),
             )
@@ -702,54 +702,54 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
         }
         Tier::Default => {
             print_filtered_overview_with_diff(
-                &atlas_dir.join("overview.md"),
+                &charter_dir.join("overview.md"),
                 focus_normalized.as_deref(),
                 changed_files.as_ref(),
             )
             .await?;
             println!();
             print_filtered_symbols_with_diff(
-                &atlas_dir.join("symbols.md"),
+                &charter_dir.join("symbols.md"),
                 focus_normalized.as_deref(),
                 changed_files.as_ref(),
             )
             .await?;
             println!();
-            print_filtered_types(&atlas_dir.join("types.md"), focus_normalized.as_deref()).await?;
+            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref()).await?;
             println!();
             print_filtered_dependents(
-                &atlas_dir.join("dependents.md"),
+                &charter_dir.join("dependents.md"),
                 focus_normalized.as_deref(),
             )
             .await?;
         }
         Tier::Full => {
             print_filtered_overview_with_diff(
-                &atlas_dir.join("overview.md"),
+                &charter_dir.join("overview.md"),
                 focus_normalized.as_deref(),
                 changed_files.as_ref(),
             )
             .await?;
             println!();
             print_filtered_symbols_with_diff(
-                &atlas_dir.join("symbols.md"),
+                &charter_dir.join("symbols.md"),
                 focus_normalized.as_deref(),
                 changed_files.as_ref(),
             )
             .await?;
             println!();
-            print_filtered_types(&atlas_dir.join("types.md"), focus_normalized.as_deref()).await?;
+            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref()).await?;
             println!();
             print_filtered_dependents(
-                &atlas_dir.join("dependents.md"),
+                &charter_dir.join("dependents.md"),
                 focus_normalized.as_deref(),
             )
             .await?;
             println!();
-            print_filtered_refs(&atlas_dir.join("refs.md"), focus_normalized.as_deref()).await?;
+            print_filtered_refs(&charter_dir.join("refs.md"), focus_normalized.as_deref()).await?;
             println!();
             print_filtered_manifest_with_diff(
-                &atlas_dir.join("manifest.md"),
+                &charter_dir.join("manifest.md"),
                 focus_normalized.as_deref(),
                 changed_files.as_ref(),
             )
@@ -774,8 +774,8 @@ fn path_matches_focus(path: &str, focus: &str) -> bool {
         || normalized_path == focus
 }
 
-async fn check_focus_matches(atlas_dir: &Path, focus: &str) {
-    let Ok(content) = fs::read_to_string(atlas_dir.join("symbols.md")).await else {
+async fn check_focus_matches(charter_dir: &Path, focus: &str) {
+    let Ok(content) = fs::read_to_string(charter_dir.join("symbols.md")).await else {
         return;
     };
 
@@ -832,7 +832,7 @@ async fn check_focus_matches(atlas_dir: &Path, focus: &str) {
             eprintln!("  {}", suggestion);
         }
         if let Some(first) = suggestions.first() {
-            eprintln!("Try: atlas read --focus {}", first);
+            eprintln!("Try: charter read --focus {}", first);
         }
         eprintln!();
     } else {
@@ -872,7 +872,7 @@ async fn check_focus_matches(atlas_dir: &Path, focus: &str) {
 
 #[allow(dead_code)]
 async fn generate_peek_preamble(root: &Path, focus: Option<&str>) -> String {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
     let git_info = get_git_info(root).await.ok();
     let meta = load_meta(root).await.ok();
 
@@ -883,19 +883,19 @@ async fn generate_peek_preamble(root: &Path, focus: Option<&str>) -> String {
 
     let stamp = match (&git_info, focus) {
         (Some(git), Some(focus_path)) => format!(
-            "[atlas @ {} | {} | {} files | {} lines | focus: {}]",
+            "[charter @ {} | {} | {} files | {} lines | focus: {}]",
             git.commit_short, timestamp, file_count, total_lines, focus_path
         ),
         (Some(git), None) => format!(
-            "[atlas @ {} | {} | {} files | {} lines]",
+            "[charter @ {} | {} | {} files | {} lines]",
             git.commit_short, timestamp, file_count, total_lines
         ),
         (None, Some(focus_path)) => format!(
-            "[atlas | {} | {} files | {} lines | no git | focus: {}]",
+            "[charter | {} | {} files | {} lines | no git | focus: {}]",
             timestamp, file_count, total_lines, focus_path
         ),
         (None, None) => format!(
-            "[atlas | {} | {} files | {} lines | no git]",
+            "[charter | {} | {} files | {} lines | no git]",
             timestamp, file_count, total_lines
         ),
     };
@@ -913,41 +913,41 @@ async fn generate_peek_preamble(root: &Path, focus: Option<&str>) -> String {
 
     lines.push(String::new());
 
-    if let Some(workspace_summary) = parse_workspace_summary(&atlas_dir).await {
+    if let Some(workspace_summary) = parse_workspace_summary(&charter_dir).await {
         lines.push(workspace_summary);
     }
 
-    if let Some(entry_summary) = parse_entry_points(&atlas_dir).await {
+    if let Some(entry_summary) = parse_entry_points(&charter_dir).await {
         lines.push(entry_summary);
     }
 
     lines.push(String::new());
 
-    if let Some(top_traits) = parse_top_traits(&atlas_dir).await {
+    if let Some(top_traits) = parse_top_traits(&charter_dir).await {
         lines.push("Top traits by impl count:".to_string());
         lines.push(format!("  {}", top_traits));
         lines.push(String::new());
     }
 
-    if let Some(top_dependents) = parse_top_dependents(&atlas_dir).await {
+    if let Some(top_dependents) = parse_top_dependents(&charter_dir).await {
         lines.push("Most-depended-on files:".to_string());
         lines.push(format!("  {}", top_dependents));
         lines.push(String::new());
     }
 
-    if let Some(top_refs) = parse_top_refs(&atlas_dir).await {
+    if let Some(top_refs) = parse_top_refs(&charter_dir).await {
         lines.push("Top referenced types:".to_string());
         lines.push(format!("  {}", top_refs));
         lines.push(String::new());
     }
 
-    if let Some(high_churn) = parse_high_churn(&atlas_dir).await {
+    if let Some(high_churn) = parse_high_churn(&charter_dir).await {
         lines.push("High-churn files:".to_string());
         lines.push(format!("  {}", high_churn));
         lines.push(String::new());
     }
 
-    if let Some(features) = parse_features(&atlas_dir).await {
+    if let Some(features) = parse_features(&charter_dir).await {
         lines.push(format!("Features: {}", features));
         lines.push(String::new());
     }
@@ -968,7 +968,7 @@ async fn generate_peek_preamble_with_diff(
     focus: Option<&str>,
     diff: Option<&DiffContext>,
 ) -> String {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
     let git_info = get_git_info(root).await.ok();
     let meta = load_meta(root).await.ok();
 
@@ -984,19 +984,19 @@ async fn generate_peek_preamble_with_diff(
 
     let stamp = match (&git_info, focus) {
         (Some(git), Some(focus_path)) => format!(
-            "[atlas @ {} | {} | {} files | {} lines | focus: {}{}]",
+            "[charter @ {} | {} | {} files | {} lines | focus: {}{}]",
             git.commit_short, timestamp, file_count, total_lines, focus_path, since_part
         ),
         (Some(git), None) => format!(
-            "[atlas @ {} | {} | {} files | {} lines{}]",
+            "[charter @ {} | {} | {} files | {} lines{}]",
             git.commit_short, timestamp, file_count, total_lines, since_part
         ),
         (None, Some(focus_path)) => format!(
-            "[atlas | {} | {} files | {} lines | no git | focus: {}{}]",
+            "[charter | {} | {} files | {} lines | no git | focus: {}{}]",
             timestamp, file_count, total_lines, focus_path, since_part
         ),
         (None, None) => format!(
-            "[atlas | {} | {} files | {} lines | no git{}]",
+            "[charter | {} | {} files | {} lines | no git{}]",
             timestamp, file_count, total_lines, since_part
         ),
     };
@@ -1030,41 +1030,41 @@ async fn generate_peek_preamble_with_diff(
 
     lines.push(String::new());
 
-    if let Some(workspace_summary) = parse_workspace_summary(&atlas_dir).await {
+    if let Some(workspace_summary) = parse_workspace_summary(&charter_dir).await {
         lines.push(workspace_summary);
     }
 
-    if let Some(entry_summary) = parse_entry_points(&atlas_dir).await {
+    if let Some(entry_summary) = parse_entry_points(&charter_dir).await {
         lines.push(entry_summary);
     }
 
     lines.push(String::new());
 
-    if let Some(top_traits) = parse_top_traits(&atlas_dir).await {
+    if let Some(top_traits) = parse_top_traits(&charter_dir).await {
         lines.push("Top traits by impl count:".to_string());
         lines.push(format!("  {}", top_traits));
         lines.push(String::new());
     }
 
-    if let Some(top_dependents) = parse_top_dependents(&atlas_dir).await {
+    if let Some(top_dependents) = parse_top_dependents(&charter_dir).await {
         lines.push("Most-depended-on files:".to_string());
         lines.push(format!("  {}", top_dependents));
         lines.push(String::new());
     }
 
-    if let Some(top_refs) = parse_top_refs(&atlas_dir).await {
+    if let Some(top_refs) = parse_top_refs(&charter_dir).await {
         lines.push("Top referenced types:".to_string());
         lines.push(format!("  {}", top_refs));
         lines.push(String::new());
     }
 
-    if let Some(high_churn) = parse_high_churn(&atlas_dir).await {
+    if let Some(high_churn) = parse_high_churn(&charter_dir).await {
         lines.push("High-churn files:".to_string());
         lines.push(format!("  {}", high_churn));
         lines.push(String::new());
     }
 
-    if let Some(features) = parse_features(&atlas_dir).await {
+    if let Some(features) = parse_features(&charter_dir).await {
         lines.push(format!("Features: {}", features));
         lines.push(String::new());
     }
@@ -1080,8 +1080,8 @@ async fn generate_peek_preamble_with_diff(
     lines.join("\n")
 }
 
-async fn parse_workspace_summary(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("overview.md"))
+async fn parse_workspace_summary(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("overview.md"))
         .await
         .ok()?;
     let mut lines_iter = content.lines();
@@ -1133,8 +1133,8 @@ async fn parse_workspace_summary(atlas_dir: &Path) -> Option<String> {
     }
 }
 
-async fn parse_entry_points(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("overview.md"))
+async fn parse_entry_points(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("overview.md"))
         .await
         .ok()?;
 
@@ -1189,8 +1189,8 @@ async fn parse_entry_points(atlas_dir: &Path) -> Option<String> {
     Some(format!("Entry points: {}", parts.join(", ")))
 }
 
-async fn parse_top_traits(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("types.md")).await.ok()?;
+async fn parse_top_traits(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("types.md")).await.ok()?;
 
     let mut trait_counts: Vec<(String, usize)> = Vec::new();
 
@@ -1234,8 +1234,8 @@ async fn parse_top_traits(atlas_dir: &Path) -> Option<String> {
     Some(formatted.join(", "))
 }
 
-async fn parse_top_dependents(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("dependents.md"))
+async fn parse_top_dependents(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("dependents.md"))
         .await
         .ok()?;
 
@@ -1272,8 +1272,8 @@ async fn parse_top_dependents(atlas_dir: &Path) -> Option<String> {
     Some(formatted.join(", "))
 }
 
-async fn parse_top_refs(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("refs.md")).await.ok()?;
+async fn parse_top_refs(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("refs.md")).await.ok()?;
 
     let mut refs: Vec<(String, usize)> = Vec::new();
 
@@ -1369,8 +1369,8 @@ fn is_infrastructure_trait(name: &str) -> bool {
     INFRA_TRAITS.contains(&base_name)
 }
 
-async fn parse_high_churn(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("manifest.md"))
+async fn parse_high_churn(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("manifest.md"))
         .await
         .ok()?;
 
@@ -1394,8 +1394,8 @@ async fn parse_high_churn(atlas_dir: &Path) -> Option<String> {
     Some(high_churn.join(", "))
 }
 
-async fn parse_features(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("overview.md"))
+async fn parse_features(charter_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(charter_dir.join("overview.md"))
         .await
         .ok()?;
 
@@ -1438,10 +1438,10 @@ async fn parse_features(atlas_dir: &Path) -> Option<String> {
 }
 
 pub async fn stats(root: &Path) -> Result<()> {
-    let meta_path = root.join(".atlas/meta.json");
+    let meta_path = root.join(".charter/meta.json");
 
     if !meta_path.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
@@ -1456,7 +1456,7 @@ pub async fn stats(root: &Path) -> Result<()> {
         .unwrap_or("unknown");
     let commit = meta.get("git_commit").and_then(|v| v.as_str());
 
-    println!("atlas status");
+    println!("charter status");
     println!("  files: {}", files);
     println!("  lines: {}", lines);
     println!("  captured: {}", timestamp);
@@ -1475,7 +1475,7 @@ struct Meta {
 }
 
 async fn load_meta(root: &Path) -> Result<Meta> {
-    let content = fs::read_to_string(root.join(".atlas/meta.json")).await?;
+    let content = fs::read_to_string(root.join(".charter/meta.json")).await?;
     let meta: Meta = serde_json::from_str(&content)?;
     Ok(meta)
 }
@@ -1595,7 +1595,7 @@ async fn print_filtered_overview(path: &Path, focus: Option<&str>) -> Result<()>
     let mut skip_empty = true;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -1662,7 +1662,7 @@ async fn print_filtered_overview_with_diff(
     let mut skip_empty = true;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -1734,7 +1734,7 @@ async fn print_filtered_symbols(path: &Path, focus: Option<&str>) -> Result<()> 
     let mut skip_empty = true;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -1798,7 +1798,7 @@ async fn print_filtered_symbols_with_diff(
     let mut skip_empty = true;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -1875,7 +1875,7 @@ async fn print_filtered_types(path: &Path, focus: Option<&str>) -> Result<()> {
     let mut printed_derived_header = false;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -2004,7 +2004,7 @@ async fn print_filtered_dependents(path: &Path, focus: Option<&str>) -> Result<(
     let mut header_printed = false;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -2051,7 +2051,7 @@ async fn print_filtered_refs(path: &Path, focus: Option<&str>) -> Result<()> {
     let mut header_printed = false;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -2102,7 +2102,7 @@ async fn print_filtered_manifest(path: &Path, focus: Option<&str>) -> Result<()>
     let mut header_printed = false;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -2149,7 +2149,7 @@ async fn print_filtered_manifest_with_diff(
     let mut header_printed = false;
 
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             continue;
         }
 
@@ -2187,7 +2187,7 @@ async fn print_filtered_manifest_with_diff(
 fn print_content_without_stamp(content: &str) {
     let mut skip_empty = true;
     for line in content.lines() {
-        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+        if line.starts_with("[charter @") || line.starts_with("[charter |") {
             skip_empty = true;
             continue;
         }

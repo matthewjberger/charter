@@ -1,8 +1,8 @@
-# atlas Development Guide
+# charter Development Guide
 
 ## Overview
 
-atlas is a fast async CLI tool that generates token-dense structural context for Rust codebases. It produces a `.atlas/` directory containing parsed symbol information, type relationships, and cross-references optimized for LLM consumption.
+charter is a fast async CLI tool that generates token-dense structural context for Rust codebases. It produces a `.charter/` directory containing parsed symbol information, type relationships, and cross-references optimized for LLM consumption.
 
 ## Architecture
 
@@ -73,14 +73,14 @@ src/
 ## Commands
 
 ```
-atlas [path]                    - Generate/update the atlas (default)
-atlas read [tier] [--since ref] - Dump context to stdout
-atlas status                    - Quick summary
-atlas lookup <symbol>           - Look up a single symbol
-atlas query "<query>"           - Search for symbols, callers, callees, etc.
-atlas deps [--crate name]       - Analyze external dependency usage
-atlas tests [--file path]       - Map tests to source files
-atlas session start|end|status  - Manage session state
+charter [path]                    - Generate/update the charter (default)
+charter read [tier] [--since ref] - Dump context to stdout
+charter status                    - Quick summary
+charter lookup <symbol>           - Look up a single symbol
+charter query "<query>"           - Search for symbols, callers, callees, etc.
+charter deps [--crate name]       - Analyze external dependency usage
+charter tests [--file path]       - Map tests to source files
+charter session start|end|status  - Manage session state
 ```
 
 Tiers: `quick` (overview only), `default` (overview + symbols + types), `full` (everything)

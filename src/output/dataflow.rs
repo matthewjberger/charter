@@ -35,8 +35,8 @@ struct AccessInfo {
     function: String,
 }
 
-pub async fn write_dataflow(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
-    let file = tokio::fs::File::create(atlas_dir.join("dataflow.md")).await?;
+pub async fn write_dataflow(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+    let file = tokio::fs::File::create(charter_dir.join("dataflow.md")).await?;
     let mut writer = BufWriter::new(file);
 
     writer.write_all(stamp.as_bytes()).await?;

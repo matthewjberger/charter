@@ -14,8 +14,8 @@ struct CallerEntry {
     is_try: bool,
 }
 
-pub async fn write_calls(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
-    let file = tokio::fs::File::create(atlas_dir.join("calls.md")).await?;
+pub async fn write_calls(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+    let file = tokio::fs::File::create(charter_dir.join("calls.md")).await?;
     let mut writer = BufWriter::new(file);
 
     writer.write_all(stamp.as_bytes()).await?;

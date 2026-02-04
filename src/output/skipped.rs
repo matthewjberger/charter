@@ -6,8 +6,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::pipeline::SkippedFile;
 
-pub async fn write_skipped(atlas_dir: &Path, skipped: &[SkippedFile], stamp: &str) -> Result<()> {
-    let path = atlas_dir.join("skipped.md");
+pub async fn write_skipped(charter_dir: &Path, skipped: &[SkippedFile], stamp: &str) -> Result<()> {
+    let path = charter_dir.join("skipped.md");
     let mut file = File::create(&path).await?;
 
     let mut buffer = Vec::with_capacity(16 * 1024);

@@ -50,14 +50,14 @@ fn generate_session_id() -> String {
 }
 
 pub async fn start_session(root: &Path) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
-    let session_path = atlas_dir.join("session.json");
+    let session_path = charter_dir.join("session.json");
 
     if session_path.exists() {
         let content = fs::read_to_string(&session_path).await?;
@@ -70,7 +70,7 @@ pub async fn start_session(root: &Path) -> Result<()> {
                 );
                 println!("Duration: {}", format_duration(existing.duration()));
                 println!();
-                println!("Use 'atlas session end' to end the current session first.");
+                println!("Use 'charter session end' to end the current session first.");
                 return Ok(());
             }
         }
@@ -97,18 +97,18 @@ pub async fn start_session(root: &Path) -> Result<()> {
 }
 
 pub async fn end_session(root: &Path) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
-    let session_path = atlas_dir.join("session.json");
+    let session_path = charter_dir.join("session.json");
 
     if !session_path.exists() {
         println!("No active session found.");
-        println!("Use 'atlas session start' to begin a new session.");
+        println!("Use 'charter session start' to begin a new session.");
         return Ok(());
     }
 
@@ -159,7 +159,7 @@ pub async fn end_session(root: &Path) -> Result<()> {
         _ => {}
     }
 
-    let history_dir = atlas_dir.join("sessions");
+    let history_dir = charter_dir.join("sessions");
     fs::create_dir_all(&history_dir).await?;
 
     let history_path = history_dir.join(format!("{}.json", session.id));
@@ -175,20 +175,20 @@ pub async fn end_session(root: &Path) -> Result<()> {
 }
 
 pub async fn session_status(root: &Path) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
-    let session_path = atlas_dir.join("session.json");
+    let session_path = charter_dir.join("session.json");
 
     if !session_path.exists() {
         println!("No active session.");
         println!();
 
-        let history_dir = atlas_dir.join("sessions");
+        let history_dir = charter_dir.join("sessions");
         if history_dir.exists() {
             let mut entries = fs::read_dir(&history_dir).await?;
             let mut sessions = Vec::new();
@@ -210,7 +210,7 @@ pub async fn session_status(root: &Path) -> Result<()> {
         }
 
         println!();
-        println!("Use 'atlas session start' to begin a new session.");
+        println!("Use 'charter session start' to begin a new session.");
         return Ok(());
     }
 
@@ -259,7 +259,7 @@ pub async fn session_status(root: &Path) -> Result<()> {
     }
 
     println!();
-    println!("Use 'atlas session end' to end this session.");
+    println!("Use 'charter session end' to end this session.");
 
     Ok(())
 }
@@ -270,7 +270,7 @@ pub async fn update_session_on_capture(
     files_changed: usize,
     commit: Option<&str>,
 ) -> Result<()> {
-    let session_path = root.join(".atlas/session.json");
+    let session_path = root.join(".charter/session.json");
 
     if !session_path.exists() {
         return Ok(());
@@ -297,7 +297,7 @@ pub async fn update_session_on_capture(
 
 #[allow(dead_code)]
 pub async fn track_modified_file(root: &Path, file_path: &str) -> Result<()> {
-    let session_path = root.join(".atlas/session.json");
+    let session_path = root.join(".charter/session.json");
 
     if !session_path.exists() {
         return Ok(());

@@ -41,7 +41,7 @@ fn walk_directory_sync(root: &Path) -> Result<WalkResult> {
 
             let path = entry.path();
 
-            if path.starts_with(root.join(".atlas")) {
+            if path.starts_with(root.join(".charter")) {
                 return ignore::WalkState::Continue;
             }
 

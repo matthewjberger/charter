@@ -3,10 +3,10 @@ use std::path::Path;
 use tokio::fs;
 
 pub async fn query(root: &Path, query_str: &str, limit: usize) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
@@ -14,46 +14,46 @@ pub async fn query(root: &Path, query_str: &str, limit: usize) -> Result<()> {
 
     match query_type {
         QueryType::CallersOf { target } => {
-            find_callers(&atlas_dir, &target, limit).await?;
+            find_callers(&charter_dir, &target, limit).await?;
         }
         QueryType::CalleesOf { target } => {
-            find_callees(&atlas_dir, &target, limit).await?;
+            find_callees(&charter_dir, &target, limit).await?;
         }
         QueryType::ImplementorsOf { trait_name } => {
-            find_implementors(&atlas_dir, &trait_name, limit).await?;
+            find_implementors(&charter_dir, &trait_name, limit).await?;
         }
         QueryType::UsersOf { symbol } => {
-            find_users(&atlas_dir, &symbol, limit).await?;
+            find_users(&charter_dir, &symbol, limit).await?;
         }
         QueryType::ErrorsIn { file } => {
-            find_errors_in(&atlas_dir, &file, limit).await?;
+            find_errors_in(&charter_dir, &file, limit).await?;
         }
         QueryType::Hotspots => {
-            find_hotspots(&atlas_dir, limit).await?;
+            find_hotspots(&charter_dir, limit).await?;
         }
         QueryType::PublicApi => {
-            find_public_api(&atlas_dir, limit).await?;
+            find_public_api(&charter_dir, limit).await?;
         }
         QueryType::Panics => {
-            find_panics(&atlas_dir, limit).await?;
+            find_panics(&charter_dir, limit).await?;
         }
         QueryType::PanicsIn { file } => {
-            find_panics_in(&atlas_dir, &file, limit).await?;
+            find_panics_in(&charter_dir, &file, limit).await?;
         }
         QueryType::UnsafeCode => {
-            find_unsafe_code(&atlas_dir, limit).await?;
+            find_unsafe_code(&charter_dir, limit).await?;
         }
         QueryType::AsyncFunctions => {
-            find_async_functions(&atlas_dir, limit).await?;
+            find_async_functions(&charter_dir, limit).await?;
         }
         QueryType::Lifetimes => {
-            find_lifetimes(&atlas_dir, limit).await?;
+            find_lifetimes(&charter_dir, limit).await?;
         }
         QueryType::Tests => {
-            find_tests(&atlas_dir, limit).await?;
+            find_tests(&charter_dir, limit).await?;
         }
         QueryType::Keyword { terms } => {
-            keyword_search(&atlas_dir, &terms, limit).await?;
+            keyword_search(&charter_dir, &terms, limit).await?;
         }
     }
 
@@ -158,8 +158,8 @@ fn parse_query(query: &str) -> QueryType {
     QueryType::Keyword { terms }
 }
 
-async fn find_callers(atlas_dir: &Path, target: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("calls.md")).await?;
+async fn find_callers(charter_dir: &Path, target: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("calls.md")).await?;
 
     println!("Callers of '{}':", target);
     println!();
@@ -195,8 +195,8 @@ async fn find_callers(atlas_dir: &Path, target: &str, limit: usize) -> Result<()
     Ok(())
 }
 
-async fn find_callees(atlas_dir: &Path, target: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("calls.md")).await?;
+async fn find_callees(charter_dir: &Path, target: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("calls.md")).await?;
 
     println!("Callees of '{}':", target);
     println!();
@@ -231,8 +231,8 @@ async fn find_callees(atlas_dir: &Path, target: &str, limit: usize) -> Result<()
     Ok(())
 }
 
-async fn find_implementors(atlas_dir: &Path, trait_name: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("types.md")).await?;
+async fn find_implementors(charter_dir: &Path, trait_name: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("types.md")).await?;
 
     println!("Implementors of '{}':", trait_name);
     println!();
@@ -279,8 +279,8 @@ async fn find_implementors(atlas_dir: &Path, trait_name: &str, limit: usize) -> 
     Ok(())
 }
 
-async fn find_users(atlas_dir: &Path, symbol: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("refs.md")).await?;
+async fn find_users(charter_dir: &Path, symbol: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("refs.md")).await?;
 
     println!("References to '{}':", symbol);
     println!();
@@ -305,7 +305,7 @@ async fn find_users(atlas_dir: &Path, symbol: &str, limit: usize) -> Result<()> 
     }
 
     if found == 0 {
-        let symbols_content = fs::read_to_string(atlas_dir.join("symbols.md"))
+        let symbols_content = fs::read_to_string(charter_dir.join("symbols.md"))
             .await
             .unwrap_or_default();
         let mut partial_matches = Vec::new();
@@ -335,8 +335,8 @@ async fn find_users(atlas_dir: &Path, symbol: &str, limit: usize) -> Result<()> 
     Ok(())
 }
 
-async fn find_errors_in(atlas_dir: &Path, file: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("errors.md")).await?;
+async fn find_errors_in(charter_dir: &Path, file: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("errors.md")).await?;
 
     println!("Errors in '{}':", file);
     println!();
@@ -369,8 +369,8 @@ async fn find_errors_in(atlas_dir: &Path, file: &str, limit: usize) -> Result<()
     Ok(())
 }
 
-async fn find_hotspots(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("hotspots.md")).await?;
+async fn find_hotspots(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("hotspots.md")).await?;
 
     println!("Top {} hotspots by importance:", limit);
     println!();
@@ -394,8 +394,8 @@ async fn find_hotspots(atlas_dir: &Path, limit: usize) -> Result<()> {
     Ok(())
 }
 
-async fn find_public_api(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("symbols.md")).await?;
+async fn find_public_api(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("symbols.md")).await?;
 
     println!("Public API (first {} items):", limit);
     println!();
@@ -435,25 +435,25 @@ async fn find_public_api(atlas_dir: &Path, limit: usize) -> Result<()> {
     Ok(())
 }
 
-async fn keyword_search(atlas_dir: &Path, terms: &[String], limit: usize) -> Result<()> {
+async fn keyword_search(charter_dir: &Path, terms: &[String], limit: usize) -> Result<()> {
     let mut results: Vec<(String, f32)> = Vec::new();
 
-    let symbols_content = fs::read_to_string(atlas_dir.join("symbols.md"))
+    let symbols_content = fs::read_to_string(charter_dir.join("symbols.md"))
         .await
         .unwrap_or_default();
     search_in_content(&symbols_content, terms, "symbols", &mut results);
 
-    let types_content = fs::read_to_string(atlas_dir.join("types.md"))
+    let types_content = fs::read_to_string(charter_dir.join("types.md"))
         .await
         .unwrap_or_default();
     search_in_content(&types_content, terms, "types", &mut results);
 
-    let calls_content = fs::read_to_string(atlas_dir.join("calls.md"))
+    let calls_content = fs::read_to_string(charter_dir.join("calls.md"))
         .await
         .unwrap_or_default();
     search_in_content(&calls_content, terms, "calls", &mut results);
 
-    let errors_content = fs::read_to_string(atlas_dir.join("errors.md"))
+    let errors_content = fs::read_to_string(charter_dir.join("errors.md"))
         .await
         .unwrap_or_default();
     search_in_content(&errors_content, terms, "errors", &mut results);
@@ -575,8 +575,8 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     matrix[a_len][b_len]
 }
 
-async fn find_panics(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+async fn find_panics(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
 
     println!("Panic Points (first {}):", limit);
     println!();
@@ -618,14 +618,14 @@ async fn find_panics(atlas_dir: &Path, limit: usize) -> Result<()> {
     }
 
     if found == 0 {
-        println!("  No panic points found (run 'atlas' to generate safety.md)");
+        println!("  No panic points found (run 'charter' to generate safety.md)");
     }
 
     Ok(())
 }
 
-async fn find_panics_in(atlas_dir: &Path, file: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+async fn find_panics_in(charter_dir: &Path, file: &str, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
 
     println!("Panic Points in '{}':", file);
     println!();
@@ -657,8 +657,8 @@ async fn find_panics_in(atlas_dir: &Path, file: &str, limit: usize) -> Result<()
     Ok(())
 }
 
-async fn find_unsafe_code(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+async fn find_unsafe_code(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
 
     println!("Unsafe Code (first {}):", limit);
     println!();
@@ -694,8 +694,8 @@ async fn find_unsafe_code(atlas_dir: &Path, limit: usize) -> Result<()> {
     Ok(())
 }
 
-async fn find_async_functions(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+async fn find_async_functions(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
 
     println!("Async Analysis (first {}):", limit);
     println!();
@@ -731,8 +731,8 @@ async fn find_async_functions(atlas_dir: &Path, limit: usize) -> Result<()> {
     Ok(())
 }
 
-async fn find_lifetimes(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+async fn find_lifetimes(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
 
     println!("Lifetime Analysis (first {}):", limit);
     println!();
@@ -768,8 +768,8 @@ async fn find_lifetimes(atlas_dir: &Path, limit: usize) -> Result<()> {
     Ok(())
 }
 
-async fn find_tests(atlas_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(atlas_dir.join("safety.md")).await?;
+async fn find_tests(charter_dir: &Path, limit: usize) -> Result<()> {
+    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
 
     println!("Test Coverage (first {}):", limit);
     println!();

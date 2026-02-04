@@ -7,12 +7,12 @@ use crate::extract::complexity::{FunctionComplexity, ImportanceTier};
 use crate::pipeline::PipelineResult;
 
 pub async fn write_hotspots(
-    atlas_dir: &Path,
+    charter_dir: &Path,
     result: &PipelineResult,
     churn_data: &HashMap<PathBuf, u32>,
     stamp: &str,
 ) -> Result<()> {
-    let file = tokio::fs::File::create(atlas_dir.join("hotspots.md")).await?;
+    let file = tokio::fs::File::create(charter_dir.join("hotspots.md")).await?;
     let mut writer = BufWriter::new(file);
 
     writer.write_all(stamp.as_bytes()).await?;

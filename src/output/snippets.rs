@@ -4,8 +4,8 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::pipeline::{CapturedBody, PipelineResult};
 
-pub async fn write_snippets(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
-    let file = tokio::fs::File::create(atlas_dir.join("snippets.md")).await?;
+pub async fn write_snippets(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+    let file = tokio::fs::File::create(charter_dir.join("snippets.md")).await?;
     let mut writer = BufWriter::new(file);
 
     writer.write_all(stamp.as_bytes()).await?;

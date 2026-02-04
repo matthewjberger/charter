@@ -8,8 +8,8 @@ use tokio::io::AsyncWriteExt;
 use crate::extract::symbols::SymbolKind;
 use crate::pipeline::PipelineResult;
 
-pub async fn write_types(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
-    let path = atlas_dir.join("types.md");
+pub async fn write_types(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+    let path = charter_dir.join("types.md");
     let mut file = File::create(&path).await?;
 
     let mut buffer = Vec::with_capacity(64 * 1024);

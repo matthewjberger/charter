@@ -7,8 +7,8 @@ use crate::extract::errors::{ErrorInfo, ErrorReturnType};
 use crate::extract::symbols::Visibility;
 use crate::pipeline::PipelineResult;
 
-pub async fn write_errors(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
-    let file = tokio::fs::File::create(atlas_dir.join("errors.md")).await?;
+pub async fn write_errors(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+    let file = tokio::fs::File::create(charter_dir.join("errors.md")).await?;
     let mut writer = BufWriter::new(file);
 
     writer.write_all(stamp.as_bytes()).await?;

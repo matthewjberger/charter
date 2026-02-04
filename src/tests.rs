@@ -4,14 +4,14 @@ use std::path::Path;
 use tokio::fs;
 
 pub async fn tests(root: &Path, file_filter: Option<&str>) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
-    let mapping = build_test_mapping(&atlas_dir).await?;
+    let mapping = build_test_mapping(&charter_dir).await?;
 
     if let Some(file) = file_filter {
         show_tests_for_file(&mapping, file);
@@ -48,14 +48,14 @@ impl std::fmt::Display for CoverageLevel {
     }
 }
 
-async fn build_test_mapping(atlas_dir: &Path) -> Result<HashMap<String, TestMapping>> {
+async fn build_test_mapping(charter_dir: &Path) -> Result<HashMap<String, TestMapping>> {
     let mut mappings: HashMap<String, TestMapping> = HashMap::new();
 
     let mut source_files: Vec<String> = Vec::new();
     let mut test_files: Vec<String> = Vec::new();
     let mut test_functions: HashMap<String, Vec<String>> = HashMap::new();
 
-    let cache_path = atlas_dir.join("cache.bin");
+    let cache_path = charter_dir.join("cache.bin");
     if cache_path.exists() {
         if let Ok(cache_data) = fs::read(&cache_path).await {
             if let Ok(cache) = bincode::deserialize::<crate::cache::Cache>(&cache_data) {

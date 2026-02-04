@@ -8,12 +8,12 @@ use tokio::io::AsyncWriteExt;
 use crate::pipeline::PipelineResult;
 
 pub async fn write_manifest(
-    atlas_dir: &Path,
+    charter_dir: &Path,
     result: &PipelineResult,
     churn_data: &HashMap<PathBuf, u32>,
     stamp: &str,
 ) -> Result<()> {
-    let path = atlas_dir.join("manifest.md");
+    let path = charter_dir.join("manifest.md");
     let mut file = File::create(&path).await?;
 
     let mut buffer = Vec::with_capacity(64 * 1024);

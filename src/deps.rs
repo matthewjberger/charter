@@ -4,15 +4,15 @@ use std::path::Path;
 use tokio::fs;
 
 pub async fn deps(root: &Path, crate_filter: Option<&str>) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
-    if !atlas_dir.exists() {
-        eprintln!("No .atlas/ directory found. Run 'atlas' first.");
+    if !charter_dir.exists() {
+        eprintln!("No .charter/ directory found. Run 'charter' first.");
         std::process::exit(1);
     }
 
     let cargo_deps = parse_cargo_toml(root).await;
-    let import_usage = analyze_imports(&atlas_dir).await?;
+    let import_usage = analyze_imports(&charter_dir).await?;
 
     if let Some(krate) = crate_filter {
         show_crate_usage(&import_usage, krate, &cargo_deps);
@@ -76,14 +76,14 @@ struct CrateUsage {
     items: Vec<String>,
 }
 
-async fn analyze_imports(atlas_dir: &Path) -> Result<HashMap<String, CrateUsage>> {
+async fn analyze_imports(charter_dir: &Path) -> Result<HashMap<String, CrateUsage>> {
     let mut usage: HashMap<String, CrateUsage> = HashMap::new();
 
-    let _symbols_content = fs::read_to_string(atlas_dir.join("symbols.md"))
+    let _symbols_content = fs::read_to_string(charter_dir.join("symbols.md"))
         .await
         .unwrap_or_default();
 
-    let overview_content = fs::read_to_string(atlas_dir.join("overview.md"))
+    let overview_content = fs::read_to_string(charter_dir.join("overview.md"))
         .await
         .unwrap_or_default();
 
@@ -113,7 +113,7 @@ async fn analyze_imports(atlas_dir: &Path) -> Result<HashMap<String, CrateUsage>
         }
     }
 
-    let cache_path = atlas_dir.join("cache.bin");
+    let cache_path = charter_dir.join("cache.bin");
     if cache_path.exists() {
         if let Ok(cache_data) = fs::read(&cache_path).await {
             if let Ok(cache) = bincode::deserialize::<crate::cache::Cache>(&cache_data) {

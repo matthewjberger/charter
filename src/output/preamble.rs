@@ -61,14 +61,14 @@ fn format_stamp(result: &PipelineResult) -> String {
 
     match &result.git_info {
         Some(git) => format!(
-            "[atlas @ {} | {} | {} files | {} lines]",
+            "[charter @ {} | {} | {} files | {} lines]",
             git.commit_short,
             timestamp,
             result.files.len(),
             result.total_lines
         ),
         None => format!(
-            "[atlas | {} | {} files | {} lines | no git]",
+            "[charter | {} | {} files | {} lines | no git]",
             timestamp,
             result.files.len(),
             result.total_lines

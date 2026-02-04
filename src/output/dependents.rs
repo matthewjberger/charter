@@ -8,11 +8,11 @@ use tokio::io::AsyncWriteExt;
 use crate::pipeline::PipelineResult;
 
 pub async fn write_dependents(
-    atlas_dir: &Path,
+    charter_dir: &Path,
     result: &PipelineResult,
     stamp: &str,
 ) -> Result<()> {
-    let path = atlas_dir.join("dependents.md");
+    let path = charter_dir.join("dependents.md");
     let mut file = File::create(&path).await?;
 
     let mut buffer = Vec::with_capacity(64 * 1024);

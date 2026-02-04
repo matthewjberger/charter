@@ -1,11 +1,11 @@
 [package]
-name = "atlas"
+name = "charter"
 version = "0.1.0"
 edition = "2024"
 description = "Fast structural context generator for codebases"
 authors = ["Matthew Berger <matthewjordanberger@gmail.com>"]
-homepage = "https://github.com/matthewjberger/atlas"
-repository = "https://github.com/matthewjberger/atlas"
+homepage = "https://github.com/matthewjberger/charter"
+repository = "https://github.com/matthewjberger/charter"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 keywords = ["rust", "ast", "parser", "llm", "context"]

@@ -1,8 +1,8 @@
-# atlas
+# charter
 
 **Structural context for LLMs, in seconds.**
 
-atlas generates a `.atlas/` directory containing token-dense structural context for Rust codebases. When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `atlas read` dumps everything it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
+charter generates a `.charter/` directory containing token-dense structural context for Rust codebases. When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` dumps everything it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
 
 ## Installation
 
@@ -14,22 +14,22 @@ cargo install --path .
 
 ```bash
 # In your Rust project root:
-atlas              # Generate .atlas/ directory
-atlas read         # Dump context to stdout (pipe to LLM or copy/paste)
+charter              # Generate .charter/ directory
+charter read         # Dump context to stdout (pipe to LLM or copy/paste)
 ```
 
-That's it. Run `atlas` once to capture, then `atlas read` whenever you need to reload context.
+That's it. Run `charter` once to capture, then `charter read` whenever you need to reload context.
 
 ## Commands
 
-### `atlas`
+### `charter`
 
-Generates or updates the `.atlas/` directory. Incremental — only re-parses files that changed.
+Generates or updates the `.charter/` directory. Incremental — only re-parses files that changed.
 
 ```
-$ atlas
+$ charter
 
-Atlas @ a3f8c2d → b7e1d4f | 3 modified, 1 added, 0 removed
+Charter @ a3f8c2d → b7e1d4f | 3 modified, 1 added, 0 removed
 
   modified: src/ecs/query.rs (+2 symbols, signature changed: fn execute)
   modified: src/render/pipeline.rs (fields changed on RenderState)
@@ -39,7 +39,7 @@ Captured @ b7e1d4f (316 files, 89,421 lines)
   parsed: 4, cached: 312, skipped: 0
 ```
 
-### `atlas read [tier]`
+### `charter read [tier]`
 
 Dumps structural context to stdout. Three tiers control how much context:
 
@@ -50,9 +50,9 @@ Dumps structural context to stdout. Three tiers control how much context:
 | `full` | Everything | Deep refactoring, cross-cutting changes |
 
 ```bash
-atlas read          # default tier
-atlas read quick    # minimal
-atlas read full     # everything
+charter read          # default tier
+charter read quick    # minimal
+charter read full     # everything
 ```
 
 **Options:**
@@ -60,16 +60,16 @@ atlas read full     # everything
 - `--since <ref>` — Show changes since a git ref (marks files with `[+]` added, `[~]` modified, `[-]` deleted)
 
 ```bash
-atlas read --focus src/pipeline    # Only show src/pipeline/**
-atlas read --since HEAD~5          # Highlight changes in last 5 commits
+charter read --focus src/pipeline    # Only show src/pipeline/**
+charter read --since HEAD~5          # Highlight changes in last 5 commits
 ```
 
-### `atlas lookup <symbol>`
+### `charter lookup <symbol>`
 
 Look up a single symbol with full context:
 
 ```
-$ atlas lookup PipelineResult
+$ charter lookup PipelineResult
 
 PipelineResult [struct] defined at src/pipeline.rs
   pub struct PipelineResult {
@@ -86,26 +86,26 @@ PipelineResult [struct] defined at src/pipeline.rs
     src/output/calls.rs, src/output/clusters.rs, src/output/dataflow.rs, src/output/dependents.rs
 ```
 
-### `atlas query "<query>"`
+### `charter query "<query>"`
 
 Search for symbols, relationships, and patterns:
 
 ```bash
-atlas query "callers of write_calls"     # What functions call write_calls?
-atlas query "callees of capture"         # What does capture() call?
-atlas query "implementors of Default"    # What types implement Default?
-atlas query "users of Cache"             # What files use the Cache type?
-atlas query "errors in pipeline.rs"      # Error propagation in a file
-atlas query "hotspots"                   # High-complexity functions
-atlas query "public api"                 # Public symbols only
+charter query "callers of write_calls"     # What functions call write_calls?
+charter query "callees of capture"         # What does capture() call?
+charter query "implementors of Default"    # What types implement Default?
+charter query "users of Cache"             # What files use the Cache type?
+charter query "errors in pipeline.rs"      # Error propagation in a file
+charter query "hotspots"                   # High-complexity functions
+charter query "public api"                 # Public symbols only
 ```
 
-### `atlas deps [--crate <name>]`
+### `charter deps [--crate <name>]`
 
 Analyze external dependency usage:
 
 ```
-$ atlas deps --crate tokio
+$ charter deps --crate tokio
 
 tokio (version from Cargo.toml)
   Used in 12 files, 47 imports
@@ -117,12 +117,12 @@ tokio (version from Cargo.toml)
     ...
 ```
 
-### `atlas tests [--file <path>]`
+### `charter tests [--file <path>]`
 
 Map tests to source files:
 
 ```
-$ atlas tests --file src/cache.rs
+$ charter tests --file src/cache.rs
 
 Tests covering src/cache.rs:
   tests/cache_tests.rs
@@ -131,24 +131,24 @@ Tests covering src/cache.rs:
     test_cache_invalidation
 ```
 
-### `atlas session start|end|status`
+### `charter session start|end|status`
 
 Track what changed during a work session:
 
 ```bash
-atlas session start    # Mark session start
+charter session start    # Mark session start
 # ... do work ...
-atlas session status   # See what changed
-atlas session end      # End session tracking
+charter session status   # See what changed
+charter session end      # End session tracking
 ```
 
-### `atlas status`
+### `charter status`
 
 Quick summary without dumping full context:
 
 ```
-$ atlas status
-atlas status
+$ charter status
+charter status
   files: 316
   lines: 89,421
   captured: 2025-01-31T14:23:07Z
@@ -157,7 +157,7 @@ atlas status
 
 ## Output Files
 
-The `.atlas/` directory contains structured context optimized for LLM consumption:
+The `.charter/` directory contains structured context optimized for LLM consumption:
 
 ### Core Files
 
@@ -190,7 +190,7 @@ The `.atlas/` directory contains structured context optimized for LLM consumptio
 | `meta.json` | Capture metadata (timestamp, commit, file count) |
 | `FORMAT.md` | Format specification for the output files |
 
-The `.atlas/` directory is auto-gitignored.
+The `.charter/` directory is auto-gitignored.
 
 ## Output Format Examples
 
@@ -270,7 +270,7 @@ extract_items [score: 67] (src/pipeline/parse.rs:129)
 
 ## Staleness Detection
 
-If files have changed since capture, `atlas read` warns you:
+If files have changed since capture, `charter read` warns you:
 
 ```
 ⚠ 3 files changed since capture (a3f8c2d → b7e1d4f):
@@ -283,10 +283,10 @@ Structural context below may be inaccurate for these files. Read them directly f
 
 ## Preamble
 
-Every `atlas read` includes a project-specific preamble:
+Every `charter read` includes a project-specific preamble:
 
 ```
-[atlas @ a3f8c2d | 2025-01-31T14:23:07Z | 316 files | 89,421 lines]
+[charter @ a3f8c2d | 2025-01-31T14:23:07Z | 316 files | 89,421 lines]
 
 Rust workspace with 4 crates. Primary: my-engine (lib).
 Entry points: my-app (bin), 12 examples, 3 benches
@@ -311,21 +311,21 @@ Add this to your project's `CLAUDE.md`:
 ```markdown
 ## Codebase Context
 
-This project uses atlas for structural context. If you've lost track of the codebase:
+This project uses charter for structural context. If you've lost track of the codebase:
 
-- `atlas read quick` — Orientation only (~6k tokens)
-- `atlas read` — Standard context (~40k tokens)
-- `atlas read full` — Everything (~60k tokens)
+- `charter read quick` — Orientation only (~6k tokens)
+- `charter read` — Standard context (~40k tokens)
+- `charter read full` — Everything (~60k tokens)
 
-Key files in .atlas/:
+Key files in .charter/:
 - `symbols.md` — All type/function signatures
 - `calls.md` — Who calls what (and reverse: what calls whom)
 - `clusters.md` — Semantically related functions
 - `dataflow.md` — Type producers/consumers
 
 For specific lookups:
-- `atlas lookup <Symbol>` — Full context for one symbol
-- `atlas query "callers of X"` — Find all callers
+- `charter lookup <Symbol>` — Full context for one symbol
+- `charter query "callers of X"` — Find all callers
 ```
 
 ## Performance
@@ -335,7 +335,7 @@ For specific lookups:
 | Cold capture | < 3s | < 15s |
 | Warm (0 changes) | < 100ms | < 100ms |
 | Warm (10 changes) | < 500ms | < 500ms |
-| `atlas read` | < 50ms | < 50ms |
+| `charter read` | < 50ms | < 50ms |
 
 ## How It Works
 

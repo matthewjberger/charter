@@ -133,16 +133,16 @@ pub struct SkippedFile {
 }
 
 pub async fn capture(root: &Path) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
-    tokio::fs::create_dir_all(&atlas_dir).await?;
+    let charter_dir = root.join(".charter");
+    tokio::fs::create_dir_all(&charter_dir).await?;
 
-    let gitignore_path = atlas_dir.join(".gitignore");
+    let gitignore_path = charter_dir.join(".gitignore");
     if !gitignore_path.exists() {
         tokio::fs::write(&gitignore_path, "*\n").await?;
     }
 
-    let cache_path = atlas_dir.join("cache.bin");
-    let meta_path = atlas_dir.join("meta.json");
+    let cache_path = charter_dir.join("cache.bin");
+    let meta_path = charter_dir.join("meta.json");
 
     let (cache, walk_result, old_meta) = tokio::join!(
         Cache::load(&cache_path),
@@ -452,30 +452,30 @@ async fn emit_outputs(
     references: &HashMap<String, Vec<(String, usize)>>,
     churn_data: &HashMap<PathBuf, u32>,
 ) -> Result<()> {
-    let atlas_dir = root.join(".atlas");
+    let charter_dir = root.join(".charter");
 
     let stamp = format_stamp(result);
 
-    output::overview::write_overview(&atlas_dir, result, &stamp).await?;
-    output::symbols::write_symbols(&atlas_dir, result, churn_data, &stamp).await?;
-    output::type_map::write_types(&atlas_dir, result, &stamp).await?;
-    output::refs::write_refs(&atlas_dir, references, &stamp).await?;
-    output::dependents::write_dependents(&atlas_dir, result, &stamp).await?;
-    output::manifest::write_manifest(&atlas_dir, result, churn_data, &stamp).await?;
-    output::hotspots::write_hotspots(&atlas_dir, result, churn_data, &stamp).await?;
-    output::calls::write_calls(&atlas_dir, result, &stamp).await?;
-    output::errors::write_errors(&atlas_dir, result, &stamp).await?;
-    output::snippets::write_snippets(&atlas_dir, result, &stamp).await?;
-    output::safety::write_safety(&atlas_dir, result, &stamp).await?;
-    output::clusters::write_clusters(&atlas_dir, result, &stamp).await?;
-    output::dataflow::write_dataflow(&atlas_dir, result, &stamp).await?;
+    output::overview::write_overview(&charter_dir, result, &stamp).await?;
+    output::symbols::write_symbols(&charter_dir, result, churn_data, &stamp).await?;
+    output::type_map::write_types(&charter_dir, result, &stamp).await?;
+    output::refs::write_refs(&charter_dir, references, &stamp).await?;
+    output::dependents::write_dependents(&charter_dir, result, &stamp).await?;
+    output::manifest::write_manifest(&charter_dir, result, churn_data, &stamp).await?;
+    output::hotspots::write_hotspots(&charter_dir, result, churn_data, &stamp).await?;
+    output::calls::write_calls(&charter_dir, result, &stamp).await?;
+    output::errors::write_errors(&charter_dir, result, &stamp).await?;
+    output::snippets::write_snippets(&charter_dir, result, &stamp).await?;
+    output::safety::write_safety(&charter_dir, result, &stamp).await?;
+    output::clusters::write_clusters(&charter_dir, result, &stamp).await?;
+    output::dataflow::write_dataflow(&charter_dir, result, &stamp).await?;
 
     if !result.skipped.is_empty() {
-        output::skipped::write_skipped(&atlas_dir, &result.skipped, &stamp).await?;
+        output::skipped::write_skipped(&charter_dir, &result.skipped, &stamp).await?;
     }
 
-    write_meta(&atlas_dir, result).await?;
-    write_format_md(&atlas_dir).await?;
+    write_meta(&charter_dir, result).await?;
+    write_format_md(&charter_dir).await?;
 
     Ok(())
 }
@@ -485,14 +485,14 @@ fn format_stamp(result: &PipelineResult) -> String {
 
     match &result.git_info {
         Some(git) => format!(
-            "[atlas @ {} | {} | {} files | {} lines]",
+            "[charter @ {} | {} | {} files | {} lines]",
             git.commit_short,
             timestamp,
             result.files.len(),
             result.total_lines
         ),
         None => format!(
-            "[atlas | {} | {} files | {} lines | no git]",
+            "[charter | {} | {} files | {} lines | no git]",
             timestamp,
             result.files.len(),
             result.total_lines
@@ -659,7 +659,7 @@ fn print_summary(result: &PipelineResult) {
             match (&diff.old_commit, &diff.new_commit) {
                 (Some(old), Some(new)) if old != new => {
                     println!(
-                        "Atlas @ {} → {} | {} modified, {} added, {} removed",
+                        "Charter @ {} → {} | {} modified, {} added, {} removed",
                         old,
                         new,
                         diff.modified.len(),
@@ -669,7 +669,7 @@ fn print_summary(result: &PipelineResult) {
                 }
                 (None, Some(new)) => {
                     println!(
-                        "Atlas @ {} | {} modified, {} added, {} removed",
+                        "Charter @ {} | {} modified, {} added, {} removed",
                         new,
                         diff.modified.len(),
                         diff.added.len(),
@@ -678,7 +678,7 @@ fn print_summary(result: &PipelineResult) {
                 }
                 _ => {
                     println!(
-                        "Atlas | {} modified, {} added, {} removed",
+                        "Charter | {} modified, {} added, {} removed",
                         diff.modified.len(),
                         diff.added.len(),
                         diff.removed.len()
@@ -755,7 +755,7 @@ struct Meta {
     lines: usize,
 }
 
-async fn write_meta(atlas_dir: &Path, result: &PipelineResult) -> Result<()> {
+async fn write_meta(charter_dir: &Path, result: &PipelineResult) -> Result<()> {
     let meta = Meta {
         timestamp: chrono::Utc::now().to_rfc3339(),
         git_commit: result.git_info.as_ref().map(|g| g.commit_short.clone()),
@@ -764,12 +764,12 @@ async fn write_meta(atlas_dir: &Path, result: &PipelineResult) -> Result<()> {
     };
 
     let content = serde_json::to_string_pretty(&meta)?;
-    tokio::fs::write(atlas_dir.join("meta.json"), content).await?;
+    tokio::fs::write(charter_dir.join("meta.json"), content).await?;
     Ok(())
 }
 
-async fn write_format_md(atlas_dir: &Path) -> Result<()> {
-    let content = r#"# .atlas/ Format Specification
+async fn write_format_md(charter_dir: &Path) -> Result<()> {
+    let content = r#"# .charter/ Format Specification
 
 This directory contains generated structural context for Rust codebases.
 
@@ -793,7 +793,7 @@ This directory contains generated structural context for Rust codebases.
 
 Every output file starts with a commit stamp:
 ```
-[atlas @ a3f8c2d | 2025-01-31T14:23:07Z | 487 files | 74,891 lines]
+[charter @ a3f8c2d | 2025-01-31T14:23:07Z | 487 files | 74,891 lines]
 ```
 
 Use `git diff <commit>..HEAD --name-only` to assess freshness.
@@ -826,6 +826,6 @@ Importance score = (cyclomatic * 2) + (lines / 10) + (call_sites * 3) + (churn *
 - `full` — all files
 "#;
 
-    tokio::fs::write(atlas_dir.join("FORMAT.md"), content).await?;
+    tokio::fs::write(charter_dir.join("FORMAT.md"), content).await?;
     Ok(())
 }

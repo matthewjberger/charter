@@ -21,8 +21,8 @@ struct Cluster {
     dominant_impl: Option<String>,
 }
 
-pub async fn write_clusters(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
-    let file = tokio::fs::File::create(atlas_dir.join("clusters.md")).await?;
+pub async fn write_clusters(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+    let file = tokio::fs::File::create(charter_dir.join("clusters.md")).await?;
     let mut writer = BufWriter::new(file);
 
     writer.write_all(stamp.as_bytes()).await?;

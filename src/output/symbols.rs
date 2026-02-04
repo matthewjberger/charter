@@ -61,12 +61,12 @@ fn build_type_locations(result: &PipelineResult) -> HashMap<String, String> {
 }
 
 pub async fn write_symbols(
-    atlas_dir: &Path,
+    charter_dir: &Path,
     result: &PipelineResult,
     churn_data: &HashMap<PathBuf, u32>,
     stamp: &str,
 ) -> Result<()> {
-    let path = atlas_dir.join("symbols.md");
+    let path = charter_dir.join("symbols.md");
     let mut file = File::create(&path).await?;
 
     let mut buffer = Vec::with_capacity(256 * 1024);
