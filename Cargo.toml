@@ -1,6 +1,6 @@
 [package]
 name = "charter"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Fast structural context generator for Rust codebases, optimized for LLM consumption"
 authors = ["Matthew Berger <matthewjordanberger@gmail.com>"]
