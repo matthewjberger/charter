@@ -4,7 +4,11 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::pipeline::{CapturedBody, PipelineResult};
 
-pub async fn write_snippets(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+pub async fn write_snippets(
+    charter_dir: &Path,
+    result: &PipelineResult,
+    stamp: &str,
+) -> Result<()> {
     let file = tokio::fs::File::create(charter_dir.join("snippets.md")).await?;
     let mut writer = BufWriter::new(file);
 

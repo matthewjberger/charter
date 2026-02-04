@@ -21,7 +21,11 @@ struct Cluster {
     dominant_impl: Option<String>,
 }
 
-pub async fn write_clusters(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+pub async fn write_clusters(
+    charter_dir: &Path,
+    result: &PipelineResult,
+    stamp: &str,
+) -> Result<()> {
     let file = tokio::fs::File::create(charter_dir.join("clusters.md")).await?;
     let mut writer = BufWriter::new(file);
 
@@ -43,10 +47,8 @@ pub async fn write_clusters(charter_dir: &Path, result: &PipelineResult, stamp: 
     let affinity = compute_affinity_matrix(&functions, &call_graph);
     let clusters = cluster_functions(&functions, &affinity);
 
-    let mut significant_clusters: Vec<&Cluster> = clusters
-        .iter()
-        .filter(|c| c.functions.len() >= 3)
-        .collect();
+    let mut significant_clusters: Vec<&Cluster> =
+        clusters.iter().filter(|c| c.functions.len() >= 3).collect();
 
     significant_clusters.sort_by(|a, b| b.functions.len().cmp(&a.functions.len()));
 

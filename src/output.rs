@@ -715,7 +715,8 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
             )
             .await?;
             println!();
-            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref()).await?;
+            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref())
+                .await?;
             println!();
             print_filtered_dependents(
                 &charter_dir.join("dependents.md"),
@@ -738,7 +739,8 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&s
             )
             .await?;
             println!();
-            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref()).await?;
+            print_filtered_types(&charter_dir.join("types.md"), focus_normalized.as_deref())
+                .await?;
             println!();
             print_filtered_dependents(
                 &charter_dir.join("dependents.md"),
@@ -1190,7 +1192,9 @@ async fn parse_entry_points(charter_dir: &Path) -> Option<String> {
 }
 
 async fn parse_top_traits(charter_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(charter_dir.join("types.md")).await.ok()?;
+    let content = fs::read_to_string(charter_dir.join("types.md"))
+        .await
+        .ok()?;
 
     let mut trait_counts: Vec<(String, usize)> = Vec::new();
 

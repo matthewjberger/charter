@@ -8,7 +8,11 @@ use tokio::io::AsyncWriteExt;
 use crate::detect::{CrateInfo, CrateType, TargetKind};
 use crate::pipeline::PipelineResult;
 
-pub async fn write_overview(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+pub async fn write_overview(
+    charter_dir: &Path,
+    result: &PipelineResult,
+    stamp: &str,
+) -> Result<()> {
     let path = charter_dir.join("overview.md");
     let mut file = File::create(&path).await?;
 

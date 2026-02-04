@@ -35,7 +35,11 @@ struct AccessInfo {
     function: String,
 }
 
-pub async fn write_dataflow(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
+pub async fn write_dataflow(
+    charter_dir: &Path,
+    result: &PipelineResult,
+    stamp: &str,
+) -> Result<()> {
     let file = tokio::fs::File::create(charter_dir.join("dataflow.md")).await?;
     let mut writer = BufWriter::new(file);
 
@@ -59,7 +63,9 @@ pub async fn write_dataflow(charter_dir: &Path, result: &PipelineResult, stamp: 
         flows.sort_by(|a, b| {
             let a_score = a.producers.len() + a.consumers.len();
             let b_score = b.producers.len() + b.consumers.len();
-            b_score.cmp(&a_score).then_with(|| a.type_name.cmp(&b.type_name))
+            b_score
+                .cmp(&a_score)
+                .then_with(|| a.type_name.cmp(&b.type_name))
         });
 
         for flow in flows.iter().take(30) {
@@ -231,11 +237,15 @@ fn build_type_flows(result: &PipelineResult) -> HashMap<String, TypeFlow> {
                             consumers: Vec::new(),
                         });
 
-                        flows.get_mut(&base_type).unwrap().producers.push(ProducerInfo {
-                            function: symbol.name.clone(),
-                            file: file_result.relative_path.clone(),
-                            line: symbol.line,
-                        });
+                        flows
+                            .get_mut(&base_type)
+                            .unwrap()
+                            .producers
+                            .push(ProducerInfo {
+                                function: symbol.name.clone(),
+                                file: file_result.relative_path.clone(),
+                                line: symbol.line,
+                            });
                     }
                 }
 
@@ -248,11 +258,15 @@ fn build_type_flows(result: &PipelineResult) -> HashMap<String, TypeFlow> {
                             consumers: Vec::new(),
                         });
 
-                        flows.get_mut(&base_type).unwrap().consumers.push(ConsumerInfo {
-                            function: symbol.name.clone(),
-                            file: file_result.relative_path.clone(),
-                            line: symbol.line,
-                        });
+                        flows
+                            .get_mut(&base_type)
+                            .unwrap()
+                            .consumers
+                            .push(ConsumerInfo {
+                                function: symbol.name.clone(),
+                                file: file_result.relative_path.clone(),
+                                line: symbol.line,
+                            });
                     }
                 }
             }
@@ -272,11 +286,15 @@ fn build_type_flows(result: &PipelineResult) -> HashMap<String, TypeFlow> {
                         });
 
                         let qualified = format!("{}::{}", imp.type_name, method.name);
-                        flows.get_mut(&base_type).unwrap().producers.push(ProducerInfo {
-                            function: qualified,
-                            file: file_result.relative_path.clone(),
-                            line: method.line,
-                        });
+                        flows
+                            .get_mut(&base_type)
+                            .unwrap()
+                            .producers
+                            .push(ProducerInfo {
+                                function: qualified,
+                                file: file_result.relative_path.clone(),
+                                line: method.line,
+                            });
                     }
                 }
 
@@ -290,11 +308,15 @@ fn build_type_flows(result: &PipelineResult) -> HashMap<String, TypeFlow> {
                         });
 
                         let qualified = format!("{}::{}", imp.type_name, method.name);
-                        flows.get_mut(&base_type).unwrap().consumers.push(ConsumerInfo {
-                            function: qualified,
-                            file: file_result.relative_path.clone(),
-                            line: method.line,
-                        });
+                        flows
+                            .get_mut(&base_type)
+                            .unwrap()
+                            .consumers
+                            .push(ConsumerInfo {
+                                function: qualified,
+                                file: file_result.relative_path.clone(),
+                                line: method.line,
+                            });
                     }
                 }
             }
@@ -302,10 +324,14 @@ fn build_type_flows(result: &PipelineResult) -> HashMap<String, TypeFlow> {
     }
 
     for flow in flows.values_mut() {
-        flow.producers.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
-        flow.consumers.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
-        flow.producers.dedup_by(|a, b| a.function == b.function && a.file == b.file);
-        flow.consumers.dedup_by(|a, b| a.function == b.function && a.file == b.file);
+        flow.producers
+            .sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
+        flow.consumers
+            .sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
+        flow.producers
+            .dedup_by(|a, b| a.function == b.function && a.file == b.file);
+        flow.consumers
+            .dedup_by(|a, b| a.function == b.function && a.file == b.file);
     }
 
     flows
@@ -425,41 +451,10 @@ fn extract_base_type(type_str: &str) -> String {
 
 fn is_common_type(type_name: &str) -> bool {
     const COMMON: &[&str] = &[
-        "bool",
-        "char",
-        "str",
-        "String",
-        "i8",
-        "i16",
-        "i32",
-        "i64",
-        "i128",
-        "isize",
-        "u8",
-        "u16",
-        "u32",
-        "u64",
-        "u128",
-        "usize",
-        "f32",
-        "f64",
-        "Self",
-        "Option",
-        "Result",
-        "Vec",
-        "Box",
-        "Arc",
-        "Rc",
-        "HashMap",
-        "HashSet",
-        "BTreeMap",
-        "BTreeSet",
-        "Path",
-        "PathBuf",
-        "Error",
-        "Cow",
-        "Pin",
-        "Future",
+        "bool", "char", "str", "String", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16",
+        "u32", "u64", "u128", "usize", "f32", "f64", "Self", "Option", "Result", "Vec", "Box",
+        "Arc", "Rc", "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Path", "PathBuf", "Error",
+        "Cow", "Pin", "Future",
     ];
 
     COMMON.contains(&type_name)
