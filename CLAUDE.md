@@ -57,8 +57,11 @@ src/
     dependents.rs      - inverse dependencies
     manifest.rs        - file manifest
     hotspots.rs        - complexity hotspots
-    calls.rs           - call graph output
+    calls.rs           - call graph + reverse call graph
+    clusters.rs        - semantic function groupings
+    dataflow.rs        - type flow tracking
     errors.rs          - error propagation output
+    safety.rs          - unsafe/panic/async analysis
     snippets.rs        - captured function bodies
     skipped.rs         - skipped files
     preamble.rs        - LLM preamble
@@ -97,15 +100,21 @@ Query types: `callers of X`, `callees of X`, `implementors of X`, `users of X`, 
 
 ## Output Files
 
+### Core
 - `overview.md` - workspace structure, module tree, entry points
 - `symbols.md` - complete symbol index with signatures
 - `types.md` - trait definitions, impl map, derive map
 - `refs.md` - cross-reference index (PascalCase types)
 - `dependents.md` - inverse dependency map
 - `manifest.md` - file manifest with roles and churn
+
+### Analysis
+- `calls.md` - call graph + reverse call graph ("Callers" section)
+- `clusters.md` - semantic function groupings by affinity
+- `dataflow.md` - type producers/consumers, field access patterns
 - `hotspots.md` - high-complexity functions by importance score
-- `calls.md` - call graph with function relationships
 - `errors.md` - error propagation patterns and origins
+- `safety.md` - unsafe blocks, panic points, async patterns
 - `snippets.md` - captured function bodies for important code
 
 ## Performance Targets
