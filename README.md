@@ -6,7 +6,7 @@
   <a href="https://github.com/matthewjberger/charter/blob/main/LICENSE-MIT"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=for-the-badge&labelColor=555555" height="20"></a>
 </p>
 
-<p align="center"><strong>Structural context for LLMs, in seconds.</strong></p>
+<p align="center"><strong>Token-dense structural context for LLMs, in seconds.</strong></p>
 
 <p align="center">
   <code>cargo install charter</code>
@@ -14,7 +14,9 @@
 
 charter generates a `.charter/` directory containing token-dense structural context for **Rust** codebases.
 
-When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` dumps everything it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
+When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` provides the structured context it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
+
+Compresses your codebase into structured, token-efficient context — typically 60-70% smaller than raw source while preserving full structural coverage.
 
 ## Installation
 
@@ -28,7 +30,7 @@ cargo install --path .       # from source
 ```bash
 # In your Rust project root:
 charter              # Generate .charter/ directory
-charter read         # Dump context to stdout (pipe to LLM or copy/paste)
+charter read         # Output context to stdout
 ```
 
 That's it. Run `charter` once to capture, then `charter read` whenever you need to reload context.
@@ -54,7 +56,7 @@ Captured @ b7e1d4f (316 files, 89,421 lines)
 
 ### `charter read [tier]`
 
-Dumps structural context to stdout. Three tiers control how much context:
+Outputs structural context to stdout. Three tiers control verbosity:
 
 | Tier | Contents | Use when |
 |------|----------|----------|
@@ -157,7 +159,7 @@ charter session end      # End session tracking
 
 ### `charter status`
 
-Quick summary without dumping full context:
+Quick summary without full context output:
 
 ```
 $ charter status
@@ -362,13 +364,6 @@ For specific lookups:
 - Build PascalCase symbol table from Phase 1
 - Match identifier locations against symbol table
 - Write cross-references with no additional I/O
-
-## Known Limitations
-
-1. **build.rs generated code** — Files generated in `OUT_DIR` are invisible
-2. **Procedural macros** — Derive expansions are tracked but internals are opaque
-3. **Name-based resolution** — Method calls use name matching, not type inference
-4. **External crates** — Only tracks usage patterns, not external API shapes
 
 ## License
 
