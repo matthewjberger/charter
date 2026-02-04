@@ -34,7 +34,7 @@ pub async fn write_safety(charter_dir: &Path, result: &PipelineResult, stamp: &s
 use std::io::Write;
 
 fn write_panic_points(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
-    let mut all_panics: Vec<_> = result
+    let all_panics: Vec<_> = result
         .files
         .iter()
         .flat_map(|f| {
@@ -50,26 +50,32 @@ fn write_panic_points(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<(
         return Ok(());
     }
 
-    all_panics.sort_by_key(|(path, p)| (*path, p.line));
+    let mut explicit_panics: Vec<_> = all_panics
+        .iter()
+        .filter(|(_, p)| !matches!(p.kind, crate::extract::safety::PanicKind::IndexAccess))
+        .collect();
+
+    let index_count = all_panics
+        .iter()
+        .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::IndexAccess))
+        .count();
+
+    explicit_panics.sort_by_key(|(path, p)| (*path, p.line));
 
     writeln!(buffer, "## Panic Points")?;
     writeln!(buffer)?;
     writeln!(buffer, "Locations that may panic at runtime.")?;
     writeln!(buffer)?;
 
-    let unwrap_count = all_panics
+    let unwrap_count = explicit_panics
         .iter()
         .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::Unwrap))
         .count();
-    let expect_count = all_panics
+    let expect_count = explicit_panics
         .iter()
         .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::Expect(_)))
         .count();
-    let index_count = all_panics
-        .iter()
-        .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::IndexAccess))
-        .count();
-    let macro_count = all_panics
+    let macro_count = explicit_panics
         .iter()
         .filter(|(_, p)| {
             matches!(
@@ -81,40 +87,53 @@ fn write_panic_points(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<(
             )
         })
         .count();
-    let assert_count = all_panics
+    let assert_count = explicit_panics
         .iter()
         .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::Assert))
         .count();
 
-    writeln!(buffer, "Summary: {} total panic points", all_panics.len())?;
+    writeln!(buffer, "### Explicit Panics ({})", explicit_panics.len())?;
+    writeln!(buffer)?;
     writeln!(buffer, "  .unwrap(): {}", unwrap_count)?;
     writeln!(buffer, "  .expect(): {}", expect_count)?;
-    writeln!(buffer, "  index access: {}", index_count)?;
     writeln!(buffer, "  panic!/unreachable!/todo!: {}", macro_count)?;
     writeln!(buffer, "  assert!: {}", assert_count)?;
     writeln!(buffer)?;
 
-    let mut current_file = "";
-    for (path, panic) in all_panics.iter().take(100) {
-        if *path != current_file {
-            writeln!(buffer, "{}:", path)?;
-            current_file = path;
+    if !explicit_panics.is_empty() {
+        let mut current_file = "";
+        for (path, panic) in explicit_panics.iter().take(100) {
+            if *path != current_file {
+                writeln!(buffer, "{}:", path)?;
+                current_file = path;
+            }
+            let fn_context = panic
+                .containing_function
+                .as_deref()
+                .unwrap_or("(top-level)");
+            writeln!(
+                buffer,
+                "  L{} in {} — {}",
+                panic.line, fn_context, panic.kind
+            )?;
         }
-        let fn_context = panic
-            .containing_function
-            .as_deref()
-            .unwrap_or("(top-level)");
-        writeln!(
-            buffer,
-            "  L{} in {} — {}",
-            panic.line, fn_context, panic.kind
-        )?;
+
+        if explicit_panics.len() > 100 {
+            writeln!(buffer, "[+{} more]", explicit_panics.len() - 100)?;
+        }
+        writeln!(buffer)?;
     }
 
-    if all_panics.len() > 100 {
-        writeln!(buffer, "[+{} more panic points]", all_panics.len() - 100)?;
+    if index_count > 0 {
+        writeln!(buffer, "### Index Operations")?;
+        writeln!(buffer)?;
+        writeln!(
+            buffer,
+            "{} index access operations (array/slice indexing). Not listed individually.",
+            index_count
+        )?;
+        writeln!(buffer)?;
     }
-    writeln!(buffer)?;
 
     Ok(())
 }
