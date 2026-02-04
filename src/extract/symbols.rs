@@ -1,6 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FunctionBody {
+    pub full_text: Option<String>,
+    pub summary: Option<BodySummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BodySummary {
+    pub line_count: usize,
+    pub statement_count: usize,
+    pub early_returns: Vec<String>,
+    pub key_calls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileSymbols {
     pub symbols: Vec<Symbol>,
     pub impl_map: Vec<(String, String)>,
@@ -25,6 +39,7 @@ pub struct ImplMethod {
     pub is_unsafe: bool,
     pub is_const: bool,
     pub line: usize,
+    pub body: Option<FunctionBody>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +77,7 @@ pub enum SymbolKind {
     },
     Function {
         signature: String,
+        body: Option<FunctionBody>,
     },
     Const {
         const_type: String,

@@ -2,7 +2,7 @@
 name = "atlas"
 version = "0.1.0"
 edition = "2024"
-description = "Fast structural context generator for Rust codebases"
+description = "Fast structural context generator for codebases"
 authors = ["Matthew Berger <matthewjordanberger@gmail.com>"]
 homepage = "https://github.com/matthewjberger/atlas"
 repository = "https://github.com/matthewjberger/atlas"

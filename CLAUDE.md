@@ -12,6 +12,7 @@ atlas is a fast async CLI tool that generates token-dense structural context for
 - Walk: `ignore::WalkParallel` collects all `.rs` files
 - Cache check: Match `(path, size, mtime)` or blake3 hash
 - Parse: tree-sitter with thread-local parser pool
+- Extract: symbols, imports, complexity, call graph, error propagation
 - Join: `JoinSet` collects results
 - Emit: Streaming `BufWriter` per output file
 
@@ -29,6 +30,11 @@ src/
   main.rs              - entry point
   cli.rs               - clap derive CLI
   detect.rs            - project/workspace detection
+  deps.rs              - dependency analysis command
+  query.rs             - query engine
+  session.rs           - session state tracking
+  tests.rs             - test coverage mapping
+  git.rs               - async git operations
   pipeline.rs          - two-phase orchestrator
   pipeline/
     walk.rs            - parallel directory walking
@@ -39,6 +45,9 @@ src/
     symbols.rs         - Symbol, SymbolKind, etc.
     imports.rs         - use statement types
     attributes.rs      - derive/cfg types
+    complexity.rs      - cyclomatic complexity metrics
+    calls.rs           - call graph types
+    errors.rs          - error propagation types
   output.rs            - output orchestration
   output/
     overview.rs        - workspace/module tree
@@ -47,23 +56,33 @@ src/
     refs.rs            - cross-references
     dependents.rs      - inverse dependencies
     manifest.rs        - file manifest
+    hotspots.rs        - complexity hotspots
+    calls.rs           - call graph output
+    errors.rs          - error propagation output
+    snippets.rs        - captured function bodies
     skipped.rs         - skipped files
     preamble.rs        - LLM preamble
   cache.rs             - cache management
   cache/
     types.rs           - CacheEntry, FileData
-  git.rs               - async git operations
 ```
 
 ## Commands
 
 ```
-atlas [path]           - Generate/update the atlas (default)
-atlas read [tier]      - Dump context to stdout
-atlas status           - Quick summary
+atlas [path]                    - Generate/update the atlas (default)
+atlas read [tier] [--since ref] - Dump context to stdout
+atlas status                    - Quick summary
+atlas lookup <symbol>           - Look up a single symbol
+atlas query "<query>"           - Search for symbols, callers, callees, etc.
+atlas deps [--crate name]       - Analyze external dependency usage
+atlas tests [--file path]       - Map tests to source files
+atlas session start|end|status  - Manage session state
 ```
 
 Tiers: `quick` (overview only), `default` (overview + symbols + types), `full` (everything)
+
+Query types: `callers of X`, `callees of X`, `implementors of X`, `users of X`, `errors in X`, `hotspots`, `public api`
 
 ## Key Dependencies
 
@@ -74,6 +93,20 @@ Tiers: `quick` (overview only), `default` (overview + symbols + types), `full` (
 - `bincode` - cache serialization
 - `clap` - CLI parsing
 - `serde` + `serde_json` - serialization
+- `chrono` - timestamps
+
+## Output Files
+
+- `overview.md` - workspace structure, module tree, entry points
+- `symbols.md` - complete symbol index with signatures
+- `types.md` - trait definitions, impl map, derive map
+- `refs.md` - cross-reference index (PascalCase types)
+- `dependents.md` - inverse dependency map
+- `manifest.md` - file manifest with roles and churn
+- `hotspots.md` - high-complexity functions by importance score
+- `calls.md` - call graph with function relationships
+- `errors.md` - error propagation patterns and origins
+- `snippets.md` - captured function bodies for important code
 
 ## Performance Targets
 

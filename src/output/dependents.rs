@@ -81,11 +81,7 @@ fn extract_crate_prefix(file_path: &str) -> String {
     } else if file_path.starts_with("src/") {
         String::new()
     } else {
-        file_path
-            .split('/')
-            .next()
-            .unwrap_or("")
-            .to_string()
+        file_path.split('/').next().unwrap_or("").to_string()
     }
 }
 

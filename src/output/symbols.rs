@@ -566,7 +566,7 @@ fn write_symbol(
                 )?;
             }
         }
-        SymbolKind::Function { signature } => {
+        SymbolKind::Function { signature, .. } => {
             writeln!(
                 buffer,
                 "  {}{}fn {}{}",

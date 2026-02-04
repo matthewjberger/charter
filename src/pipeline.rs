@@ -72,7 +72,7 @@ pub(crate) fn is_pascal_case(name: &str) -> bool {
     has_lowercase && all_valid
 }
 
-pub use parse::ParsedFile;
+pub use parse::{CapturedBody, ParsedFile};
 
 const SEMAPHORE_PERMITS: usize = 256;
 
@@ -375,8 +375,11 @@ async fn process_file(path: &Path, root: &Path, cache: &Cache) -> Result<Option<
     let lines = count_lines(&content);
 
     let content_string = String::from_utf8_lossy(&content).into_owned();
-    let parsed =
-        tokio::task::spawn_blocking(move || parse::parse_rust_file(&content_string)).await??;
+    let relative_path_clone = relative_path.clone();
+    let parsed = tokio::task::spawn_blocking(move || {
+        parse::parse_rust_file(&content_string, &relative_path_clone)
+    })
+    .await??;
 
     Ok(Some(FileResult {
         path: path.to_path_buf(),
@@ -459,6 +462,10 @@ async fn emit_outputs(
     output::refs::write_refs(&atlas_dir, references, &stamp).await?;
     output::dependents::write_dependents(&atlas_dir, result, &stamp).await?;
     output::manifest::write_manifest(&atlas_dir, result, churn_data, &stamp).await?;
+    output::hotspots::write_hotspots(&atlas_dir, result, churn_data, &stamp).await?;
+    output::calls::write_calls(&atlas_dir, result, &stamp).await?;
+    output::errors::write_errors(&atlas_dir, result, &stamp).await?;
+    output::snippets::write_snippets(&atlas_dir, result, &stamp).await?;
 
     if !result.skipped.is_empty() {
         output::skipped::write_skipped(&atlas_dir, &result.skipped, &stamp).await?;
@@ -587,8 +594,12 @@ fn build_diff_summary(
             if let Some(old_sym) = old_symbols.iter().find(|s| s.name == new_sym.name) {
                 match (&old_sym.kind, &new_sym.kind) {
                     (
-                        SymbolKind::Function { signature: old_sig },
-                        SymbolKind::Function { signature: new_sig },
+                        SymbolKind::Function {
+                            signature: old_sig, ..
+                        },
+                        SymbolKind::Function {
+                            signature: new_sig, ..
+                        },
                     ) => {
                         if old_sig != new_sig {
                             signature_changes.push(format!("fn {}", new_sym.name));
@@ -767,6 +778,10 @@ This directory contains generated structural context for Rust codebases.
 - `refs.md` — cross-reference index (PascalCase types only)
 - `dependents.md` — inverse dependency map
 - `manifest.md` — file manifest with roles, churn, test locations
+- `hotspots.md` — high-complexity functions ranked by importance score
+- `calls.md` — call graph with hot paths and function relationships
+- `errors.md` — error propagation patterns, origins, and public API surface
+- `snippets.md` — captured function bodies for high/medium importance functions
 - `skipped.md` — files skipped during capture (if any)
 - `cache.bin` — internal cache for incremental updates
 - `meta.json` — capture metadata
@@ -780,6 +795,13 @@ Every output file starts with a commit stamp:
 
 Use `git diff <commit>..HEAD --name-only` to assess freshness.
 
+## Complexity Scoring (hotspots.md)
+
+Importance score = (cyclomatic * 2) + (lines / 10) + (call_sites * 3) + (churn * 2) + (public ? 10 : 0)
+- High: >= 30 (critical paths requiring review)
+- Medium: 15-29 (worth understanding)
+- Low: < 15 (not shown)
+
 ## Known Limitations
 
 1. **build.rs generated code**: Files generated in `OUT_DIR` are invisible to static analysis.
@@ -790,6 +812,9 @@ Use `git diff <commit>..HEAD --name-only` to assess freshness.
 
 3. **Macro-generated code**: Procedural macro expansions are not analyzed.
    Derive implementations are tracked, but their internals are opaque.
+
+4. **Call graph resolution**: Method calls use name matching, not type inference.
+   Receiver types are best-effort inferred.
 
 ## Tiers
 

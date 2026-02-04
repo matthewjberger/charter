@@ -49,7 +49,7 @@ fn walk_directory_sync(root: &Path) -> Result<WalkResult> {
                 return ignore::WalkState::Continue;
             }
 
-            if path.extension().map(|e| e == "rs").unwrap_or(false) {
+            if path.extension().is_some_and(|e| e == "rs") {
                 files.lock().unwrap().push(path.to_path_buf());
             }
 

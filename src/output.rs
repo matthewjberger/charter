@@ -1,18 +1,65 @@
+pub mod calls;
 pub mod dependents;
+pub mod errors;
+pub mod hotspots;
 pub mod manifest;
 pub mod overview;
 pub mod preamble;
 pub mod refs;
 pub mod skipped;
+pub mod snippets;
 pub mod symbols;
 pub mod type_map;
 
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::Path;
 use tokio::fs;
 
 use crate::cli::Tier;
 use crate::git::get_git_info;
+
+pub struct DiffContext {
+    pub since_ref: String,
+    pub changed_files: HashSet<String>,
+    pub added: Vec<String>,
+    pub modified: Vec<String>,
+    pub deleted: Vec<String>,
+}
+
+impl DiffContext {
+    pub fn get_marker(&self, path: &str) -> &'static str {
+        let normalized = path.replace('\\', "/");
+        if self
+            .added
+            .iter()
+            .any(|p| normalized.ends_with(p) || p.ends_with(&normalized))
+        {
+            "[+] "
+        } else if self
+            .modified
+            .iter()
+            .any(|p| normalized.ends_with(p) || p.ends_with(&normalized))
+        {
+            "[~] "
+        } else if self
+            .deleted
+            .iter()
+            .any(|p| normalized.ends_with(p) || p.ends_with(&normalized))
+        {
+            "[-] "
+        } else {
+            ""
+        }
+    }
+
+    pub fn is_changed(&self, path: &str) -> bool {
+        let normalized = path.replace('\\', "/");
+        self.changed_files
+            .iter()
+            .any(|p| normalized.ends_with(p) || p.ends_with(&normalized))
+    }
+}
 
 pub(crate) fn format_qualifiers(is_async: bool, is_unsafe: bool, is_const: bool) -> String {
     let mut parts = Vec::new();
@@ -206,7 +253,8 @@ fn find_symbol_definition(content: &str, symbol: &str, results: &mut LookupResul
 
                 results.definition_lines.push(trimmed.to_string());
                 in_target_symbol = true;
-                brace_depth = trimmed.matches('{').count() as i32 - trimmed.matches('}').count() as i32;
+                brace_depth =
+                    trimmed.matches('{').count() as i32 - trimmed.matches('}').count() as i32;
                 capture_until_next_symbol = brace_depth > 0;
                 continue;
             }
@@ -332,7 +380,7 @@ fn find_type_info(content: &str, symbol: &str, results: &mut LookupResult) {
                 let types_str = types_part.trim_start_matches('[').trim_end_matches(']');
                 let types: Vec<&str> = types_str.split(", ").collect();
 
-                if types.iter().any(|t| *t == symbol) {
+                if types.contains(&symbol) {
                     results.implements.push(trait_name.to_string());
                 }
 
@@ -461,7 +509,9 @@ fn find_similar_symbols(content: &str, symbol: &str) -> Vec<(String, String, Str
     suggestions.sort_by(|a, b| {
         let a_exact = a.0.to_lowercase() == symbol_lower;
         let b_exact = b.0.to_lowercase() == symbol_lower;
-        b_exact.cmp(&a_exact).then_with(|| a.0.len().cmp(&b.0.len()))
+        b_exact
+            .cmp(&a_exact)
+            .then_with(|| a.0.len().cmp(&b.0.len()))
     });
 
     suggestions.dedup_by(|a, b| a.0 == b.0);
@@ -489,11 +539,8 @@ fn extract_symbol_name_and_kind(line: &str) -> (String, String) {
     ];
 
     for (prefix, kind) in prefixes {
-        if line.starts_with(prefix) {
-            let rest = &line[prefix.len()..];
-            let name_end = rest
-                .find(|c: char| c == '<' || c == '(' || c == ' ' || c == '{' || c == ':')
-                .unwrap_or(rest.len());
+        if let Some(rest) = line.strip_prefix(prefix) {
+            let name_end = rest.find(['<', '(', ' ', '{', ':']).unwrap_or(rest.len());
             let name = rest[..name_end].trim().to_string();
             return (kind.to_string(), name);
         }
@@ -579,7 +626,7 @@ fn print_lookup_result(results: &LookupResult) {
     }
 }
 
-pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>) -> Result<()> {
+pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>, since: Option<&str>) -> Result<()> {
     let atlas_dir = root.join(".atlas");
 
     if !atlas_dir.exists() {
@@ -595,49 +642,115 @@ pub async fn peek(root: &Path, tier: Tier, focus: Option<&str>) -> Result<()> {
         }
     }
 
+    let changed_files = if let Some(since_ref) = since {
+        match crate::git::get_changed_files(root, since_ref).await {
+            Ok(changes) => {
+                let changed_set: std::collections::HashSet<String> =
+                    changes.iter().map(|c| c.path.clone()).collect();
+                Some(DiffContext {
+                    since_ref: since_ref.to_string(),
+                    changed_files: changed_set,
+                    added: changes
+                        .iter()
+                        .filter(|c| matches!(c.kind, crate::git::FileChangeKind::Added))
+                        .map(|c| c.path.clone())
+                        .collect(),
+                    modified: changes
+                        .iter()
+                        .filter(|c| matches!(c.kind, crate::git::FileChangeKind::Modified))
+                        .map(|c| c.path.clone())
+                        .collect(),
+                    deleted: changes
+                        .iter()
+                        .filter(|c| matches!(c.kind, crate::git::FileChangeKind::Deleted))
+                        .map(|c| c.path.clone())
+                        .collect(),
+                })
+            }
+            Err(e) => {
+                eprintln!("⚠ Could not get changes since '{}': {}", since_ref, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let focus_normalized = focus.map(normalize_focus_path);
 
     if let Some(ref focus_path) = focus_normalized {
         check_focus_matches(&atlas_dir, focus_path).await;
     }
 
-    let preamble = generate_peek_preamble(root, focus_normalized.as_deref()).await;
+    let preamble =
+        generate_peek_preamble_with_diff(root, focus_normalized.as_deref(), changed_files.as_ref())
+            .await;
     println!("{}", preamble);
     println!();
 
     match tier {
         Tier::Quick => {
-            print_filtered_overview(&atlas_dir.join("overview.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_overview_with_diff(
+                &atlas_dir.join("overview.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
         }
         Tier::Default => {
-            print_filtered_overview(&atlas_dir.join("overview.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_overview_with_diff(
+                &atlas_dir.join("overview.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
             println!();
-            print_filtered_symbols(&atlas_dir.join("symbols.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_symbols_with_diff(
+                &atlas_dir.join("symbols.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
             println!();
             print_filtered_types(&atlas_dir.join("types.md"), focus_normalized.as_deref()).await?;
             println!();
-            print_filtered_dependents(&atlas_dir.join("dependents.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_dependents(
+                &atlas_dir.join("dependents.md"),
+                focus_normalized.as_deref(),
+            )
+            .await?;
         }
         Tier::Full => {
-            print_filtered_overview(&atlas_dir.join("overview.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_overview_with_diff(
+                &atlas_dir.join("overview.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
             println!();
-            print_filtered_symbols(&atlas_dir.join("symbols.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_symbols_with_diff(
+                &atlas_dir.join("symbols.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
             println!();
             print_filtered_types(&atlas_dir.join("types.md"), focus_normalized.as_deref()).await?;
             println!();
-            print_filtered_dependents(&atlas_dir.join("dependents.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_dependents(
+                &atlas_dir.join("dependents.md"),
+                focus_normalized.as_deref(),
+            )
+            .await?;
             println!();
             print_filtered_refs(&atlas_dir.join("refs.md"), focus_normalized.as_deref()).await?;
             println!();
-            print_filtered_manifest(&atlas_dir.join("manifest.md"), focus_normalized.as_deref())
-                .await?;
+            print_filtered_manifest_with_diff(
+                &atlas_dir.join("manifest.md"),
+                focus_normalized.as_deref(),
+                changed_files.as_ref(),
+            )
+            .await?;
         }
     }
 
@@ -708,7 +821,10 @@ async fn check_focus_matches(atlas_dir: &Path, focus: &str) {
     }
 
     if !suggestions.is_empty() {
-        eprintln!("⚠ Focus path '{}' matched 0 files. Similar paths found:", focus);
+        eprintln!(
+            "⚠ Focus path '{}' matched 0 files. Similar paths found:",
+            focus
+        );
         for suggestion in suggestions.iter().take(5) {
             eprintln!("  {}", suggestion);
         }
@@ -717,7 +833,10 @@ async fn check_focus_matches(atlas_dir: &Path, focus: &str) {
         }
         eprintln!();
     } else {
-        eprintln!("⚠ Focus path '{}' matched 0 files. No similar paths found.", focus);
+        eprintln!(
+            "⚠ Focus path '{}' matched 0 files. No similar paths found.",
+            focus
+        );
 
         let mut top_level: std::collections::HashSet<String> = std::collections::HashSet::new();
         for path in &all_paths {
@@ -748,6 +867,7 @@ async fn check_focus_matches(atlas_dir: &Path, focus: &str) {
     }
 }
 
+#[allow(dead_code)]
 async fn generate_peek_preamble(root: &Path, focus: Option<&str>) -> String {
     let atlas_dir = root.join(".atlas");
     let git_info = get_git_info(root).await.ok();
@@ -783,6 +903,123 @@ async fn generate_peek_preamble(root: &Path, focus: Option<&str>) -> String {
         .unwrap_or_else(|| "HEAD".to_string());
 
     let mut lines = vec![stamp];
+
+    if let Some(focus_path) = focus {
+        lines.push(format!("Focused on: {}/", focus_path));
+    }
+
+    lines.push(String::new());
+
+    if let Some(workspace_summary) = parse_workspace_summary(&atlas_dir).await {
+        lines.push(workspace_summary);
+    }
+
+    if let Some(entry_summary) = parse_entry_points(&atlas_dir).await {
+        lines.push(entry_summary);
+    }
+
+    lines.push(String::new());
+
+    if let Some(top_traits) = parse_top_traits(&atlas_dir).await {
+        lines.push("Top traits by impl count:".to_string());
+        lines.push(format!("  {}", top_traits));
+        lines.push(String::new());
+    }
+
+    if let Some(top_dependents) = parse_top_dependents(&atlas_dir).await {
+        lines.push("Most-depended-on files:".to_string());
+        lines.push(format!("  {}", top_dependents));
+        lines.push(String::new());
+    }
+
+    if let Some(top_refs) = parse_top_refs(&atlas_dir).await {
+        lines.push("Top referenced types:".to_string());
+        lines.push(format!("  {}", top_refs));
+        lines.push(String::new());
+    }
+
+    if let Some(high_churn) = parse_high_churn(&atlas_dir).await {
+        lines.push("High-churn files:".to_string());
+        lines.push(format!("  {}", high_churn));
+        lines.push(String::new());
+    }
+
+    if let Some(features) = parse_features(&atlas_dir).await {
+        lines.push(format!("Features: {}", features));
+        lines.push(String::new());
+    }
+
+    lines.push("This context survives compaction. If you've lost track of codebase structure, everything you need is below.".to_string());
+    lines.push(format!(
+        "Verify against source for files changed since {}: git diff {}..HEAD --name-only",
+        commit_ref, commit_ref
+    ));
+    lines.push(String::new());
+    lines.push("---".to_string());
+
+    lines.join("\n")
+}
+
+async fn generate_peek_preamble_with_diff(
+    root: &Path,
+    focus: Option<&str>,
+    diff: Option<&DiffContext>,
+) -> String {
+    let atlas_dir = root.join(".atlas");
+    let git_info = get_git_info(root).await.ok();
+    let meta = load_meta(root).await.ok();
+
+    let total_lines = meta.as_ref().map(|m| m.lines).unwrap_or(0);
+    let file_count = meta.as_ref().map(|m| m.files).unwrap_or(0);
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+
+    let since_part = diff
+        .as_ref()
+        .map(|d| format!(" | since: {}", d.since_ref))
+        .unwrap_or_default();
+
+    let stamp = match (&git_info, focus) {
+        (Some(git), Some(focus_path)) => format!(
+            "[atlas @ {} | {} | {} files | {} lines | focus: {}{}]",
+            git.commit_short, timestamp, file_count, total_lines, focus_path, since_part
+        ),
+        (Some(git), None) => format!(
+            "[atlas @ {} | {} | {} files | {} lines{}]",
+            git.commit_short, timestamp, file_count, total_lines, since_part
+        ),
+        (None, Some(focus_path)) => format!(
+            "[atlas | {} | {} files | {} lines | no git | focus: {}{}]",
+            timestamp, file_count, total_lines, focus_path, since_part
+        ),
+        (None, None) => format!(
+            "[atlas | {} | {} files | {} lines | no git{}]",
+            timestamp, file_count, total_lines, since_part
+        ),
+    };
+
+    let commit_ref = git_info
+        .as_ref()
+        .map(|g| g.commit_short.clone())
+        .unwrap_or_else(|| "HEAD".to_string());
+
+    let mut lines = vec![stamp];
+
+    if let Some(diff_ctx) = diff {
+        let total_changes = diff_ctx.added.len() + diff_ctx.modified.len() + diff_ctx.deleted.len();
+        if total_changes > 0 {
+            lines.push(String::new());
+            lines.push(format!(
+                "Changes since {}: {} files (+{} ~{} -{})",
+                diff_ctx.since_ref,
+                total_changes,
+                diff_ctx.added.len(),
+                diff_ctx.modified.len(),
+                diff_ctx.deleted.len()
+            ));
+            lines.push("Markers: [+] added, [~] modified, [-] deleted".to_string());
+        }
+    }
 
     if let Some(focus_path) = focus {
         lines.push(format!("Focused on: {}/", focus_path));
@@ -1033,9 +1270,7 @@ async fn parse_top_dependents(atlas_dir: &Path) -> Option<String> {
 }
 
 async fn parse_top_refs(atlas_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(atlas_dir.join("refs.md"))
-        .await
-        .ok()?;
+    let content = fs::read_to_string(atlas_dir.join("refs.md")).await.ok()?;
 
     let mut refs: Vec<(String, usize)> = Vec::new();
 
@@ -1074,20 +1309,58 @@ async fn parse_top_refs(atlas_dir: &Path) -> Option<String> {
 
 fn is_infrastructure_type(name: &str) -> bool {
     const INFRA_TYPES: &[&str] = &[
-        "Result", "Error", "Option", "Vec", "String", "Box", "Arc", "Rc",
-        "HashMap", "HashSet", "BTreeMap", "BTreeSet",
-        "PhantomData", "Pin", "Cow", "Cell", "RefCell",
-        "Mutex", "RwLock", "MutexGuard", "Sender", "Receiver",
+        "Result",
+        "Error",
+        "Option",
+        "Vec",
+        "String",
+        "Box",
+        "Arc",
+        "Rc",
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
+        "PhantomData",
+        "Pin",
+        "Cow",
+        "Cell",
+        "RefCell",
+        "Mutex",
+        "RwLock",
+        "MutexGuard",
+        "Sender",
+        "Receiver",
     ];
     INFRA_TYPES.contains(&name)
 }
 
 fn is_infrastructure_trait(name: &str) -> bool {
     const INFRA_TRAITS: &[&str] = &[
-        "Default", "Clone", "Debug", "Copy", "PartialEq", "Eq", "PartialOrd", "Ord",
-        "Hash", "Send", "Sync", "Display", "From", "Into", "AsRef", "AsMut",
-        "Deref", "DerefMut", "Drop", "Iterator", "IntoIterator",
-        "Serialize", "Deserialize", "Component",
+        "Default",
+        "Clone",
+        "Debug",
+        "Copy",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash",
+        "Send",
+        "Sync",
+        "Display",
+        "From",
+        "Into",
+        "AsRef",
+        "AsMut",
+        "Deref",
+        "DerefMut",
+        "Drop",
+        "Iterator",
+        "IntoIterator",
+        "Serialize",
+        "Deserialize",
+        "Component",
     ];
     let base_name = name.split('<').next().unwrap_or(name);
     INFRA_TRAITS.contains(&base_name)
@@ -1301,6 +1574,7 @@ async fn check_staleness(root: &Path, captured_commit: &str) -> Option<String> {
     Some(warning)
 }
 
+#[allow(dead_code)]
 async fn print_filtered_overview(path: &Path, focus: Option<&str>) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -1364,6 +1638,82 @@ async fn print_filtered_overview(path: &Path, focus: Option<&str>) -> Result<()>
     Ok(())
 }
 
+async fn print_filtered_overview_with_diff(
+    path: &Path,
+    focus: Option<&str>,
+    diff: Option<&DiffContext>,
+) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(path).await?;
+
+    if focus.is_none() && diff.is_none() {
+        print_content_without_stamp(&content);
+        return Ok(());
+    }
+
+    let mut in_module_tree = false;
+    let mut current_section_matches = false;
+    let mut skip_empty = true;
+
+    for line in content.lines() {
+        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+            continue;
+        }
+
+        if skip_empty && line.is_empty() {
+            continue;
+        }
+        skip_empty = false;
+
+        if line == "Module tree:" {
+            in_module_tree = true;
+            println!("{}", line);
+            continue;
+        }
+
+        if in_module_tree {
+            if !line.starts_with("  ") && !line.is_empty() {
+                in_module_tree = false;
+            } else if line.starts_with("  ") {
+                let trimmed = line.trim();
+                let module_path = trimmed.split_whitespace().next().unwrap_or("");
+                let module_path_normalized = module_path.replace("::", "/");
+
+                let focus_match = focus.is_none_or(|f| {
+                    path_matches_focus(&module_path_normalized, f)
+                        || f.starts_with(&module_path_normalized)
+                });
+
+                if focus_match {
+                    let marker = diff.map_or("", |d| d.get_marker(&module_path_normalized));
+                    if marker.is_empty() {
+                        println!("{}", line);
+                    } else {
+                        println!("{}{}", marker, trimmed);
+                    }
+                }
+                continue;
+            }
+        }
+
+        if line.ends_with(':') && !line.starts_with(' ') {
+            current_section_matches = true;
+            println!("{}", line);
+            continue;
+        }
+
+        if current_section_matches {
+            println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 async fn print_filtered_symbols(path: &Path, focus: Option<&str>) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -1417,6 +1767,84 @@ async fn print_filtered_symbols(path: &Path, focus: Option<&str>) -> Result<()> 
     if current_file_matches && !buffer.is_empty() {
         for buffered_line in &buffer {
             println!("{}", buffered_line);
+        }
+    }
+
+    Ok(())
+}
+
+async fn print_filtered_symbols_with_diff(
+    path: &Path,
+    focus: Option<&str>,
+    diff: Option<&DiffContext>,
+) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(path).await?;
+
+    if focus.is_none() && diff.is_none() {
+        print_content_without_stamp(&content);
+        return Ok(());
+    }
+
+    let mut current_file_matches = false;
+    let mut current_file_path = String::new();
+    let mut buffer: Vec<String> = Vec::new();
+    let mut skip_empty = true;
+
+    for line in content.lines() {
+        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+            continue;
+        }
+
+        if skip_empty && line.is_empty() {
+            continue;
+        }
+        skip_empty = false;
+
+        let is_file_header = !line.starts_with(' ')
+            && !line.is_empty()
+            && (line.contains(".rs [") || line.contains(".rs:"));
+
+        if is_file_header {
+            if current_file_matches && !buffer.is_empty() {
+                let marker = diff.map_or("", |d| d.get_marker(&current_file_path));
+                for (index, buffered_line) in buffer.iter().enumerate() {
+                    if index == 0 && !marker.is_empty() {
+                        println!("{}{}", marker, buffered_line);
+                    } else {
+                        println!("{}", buffered_line);
+                    }
+                }
+                println!();
+            }
+            buffer.clear();
+
+            let file_path = line.split_whitespace().next().unwrap_or("");
+            current_file_path = file_path.to_string();
+
+            let focus_match = focus.is_none_or(|f| path_matches_focus(file_path, f));
+            let diff_match = diff.is_none_or(|d| d.is_changed(file_path));
+            current_file_matches = focus_match && (diff.is_none() || diff_match);
+
+            if current_file_matches {
+                buffer.push(line.to_string());
+            }
+        } else if current_file_matches {
+            buffer.push(line.to_string());
+        }
+    }
+
+    if current_file_matches && !buffer.is_empty() {
+        let marker = diff.map_or("", |d| d.get_marker(&current_file_path));
+        for (index, buffered_line) in buffer.iter().enumerate() {
+            if index == 0 && !marker.is_empty() {
+                println!("{}{}", marker, buffered_line);
+            } else {
+                println!("{}", buffered_line);
+            }
         }
     }
 
@@ -1654,6 +2082,7 @@ async fn print_filtered_refs(path: &Path, focus: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn print_filtered_manifest(path: &Path, focus: Option<&str>) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -1691,6 +2120,61 @@ async fn print_filtered_manifest(path: &Path, focus: Option<&str>) -> Result<()>
                 header_printed = true;
             }
             println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+async fn print_filtered_manifest_with_diff(
+    path: &Path,
+    focus: Option<&str>,
+    diff: Option<&DiffContext>,
+) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(path).await?;
+
+    if focus.is_none() && diff.is_none() {
+        print_content_without_stamp(&content);
+        return Ok(());
+    }
+
+    let mut skip_empty = true;
+    let mut header_printed = false;
+
+    for line in content.lines() {
+        if line.starts_with("[atlas @") || line.starts_with("[atlas |") {
+            continue;
+        }
+
+        if skip_empty && line.is_empty() {
+            continue;
+        }
+        skip_empty = false;
+
+        if line.starts_with("# ") {
+            continue;
+        }
+
+        let file_path = line.split_whitespace().next().unwrap_or("");
+        let focus_match = focus.is_none_or(|f| path_matches_focus(file_path, f));
+        let diff_match = diff.is_none_or(|d| d.is_changed(file_path));
+
+        if focus_match && (diff.is_none() || diff_match) {
+            if !header_printed {
+                println!("# File Manifest");
+                println!();
+                header_printed = true;
+            }
+            let marker = diff.map_or("", |d| d.get_marker(file_path));
+            if marker.is_empty() {
+                println!("{}", line);
+            } else {
+                println!("{}{}", marker, line);
+            }
         }
     }
 
