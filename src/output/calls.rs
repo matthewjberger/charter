@@ -6,6 +6,14 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use crate::extract::calls::CallInfo;
 use crate::pipeline::PipelineResult;
 
+struct CallerEntry {
+    caller_name: String,
+    file: String,
+    line: usize,
+    is_async: bool,
+    is_try: bool,
+}
+
 pub async fn write_calls(atlas_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
     let file = tokio::fs::File::create(atlas_dir.join("calls.md")).await?;
     let mut writer = BufWriter::new(file);
@@ -125,6 +133,9 @@ pub async fn write_calls(atlas_dir: &Path, result: &PipelineResult, stamp: &str)
         writer.write_all(b"\n").await?;
     }
 
+    let reverse_graph = build_reverse_call_graph(result);
+    write_callers_section(&mut writer, &reverse_graph).await?;
+
     let async_calls = count_async_calls(&all_calls);
     let try_calls = count_try_calls(&all_calls);
 
@@ -234,4 +245,94 @@ fn count_try_calls(calls: &[&CallInfo]) -> usize {
         .flat_map(|c| &c.callees)
         .filter(|e| e.is_try_call)
         .count()
+}
+
+fn build_reverse_call_graph(result: &PipelineResult) -> HashMap<String, Vec<CallerEntry>> {
+    let mut reverse: HashMap<String, Vec<CallerEntry>> = HashMap::new();
+
+    for file_result in &result.files {
+        for call_info in &file_result.parsed.call_graph {
+            let caller_name = call_info.caller.qualified_name();
+
+            for edge in &call_info.callees {
+                let target = edge.qualified_target();
+
+                if is_common_utility(&target) {
+                    continue;
+                }
+
+                reverse.entry(target).or_default().push(CallerEntry {
+                    caller_name: caller_name.clone(),
+                    file: file_result.relative_path.clone(),
+                    line: edge.line,
+                    is_async: edge.is_async_call,
+                    is_try: edge.is_try_call,
+                });
+            }
+        }
+    }
+
+    for callers in reverse.values_mut() {
+        callers.sort_by(|a, b| {
+            a.file
+                .cmp(&b.file)
+                .then_with(|| a.caller_name.cmp(&b.caller_name))
+                .then_with(|| a.line.cmp(&b.line))
+        });
+        callers.dedup_by(|a, b| a.file == b.file && a.caller_name == b.caller_name);
+    }
+
+    reverse
+}
+
+async fn write_callers_section(
+    writer: &mut BufWriter<tokio::fs::File>,
+    reverse_graph: &HashMap<String, Vec<CallerEntry>>,
+) -> Result<()> {
+    let mut targets_with_callers: Vec<(&String, &Vec<CallerEntry>)> = reverse_graph
+        .iter()
+        .filter(|(_, callers)| callers.len() >= 3)
+        .collect();
+
+    if targets_with_callers.is_empty() {
+        return Ok(());
+    }
+
+    targets_with_callers.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(b.0)));
+
+    writer.write_all(b"## Callers\n\n").await?;
+    writer
+        .write_all(b"Functions that call each target, sorted by call count.\n\n")
+        .await?;
+
+    for (target, callers) in targets_with_callers.iter().take(50) {
+        let header = format!("{} [{} callers]\n", target, callers.len());
+        writer.write_all(header.as_bytes()).await?;
+
+        let shown_count = 5.min(callers.len());
+        for caller in callers.iter().take(shown_count) {
+            let mut suffix = String::new();
+            if caller.is_async {
+                suffix.push_str(" [async]");
+            }
+            if caller.is_try {
+                suffix.push_str(" [?]");
+            }
+
+            let line = format!(
+                "  {} ({}:{}){}\n",
+                caller.caller_name, caller.file, caller.line, suffix
+            );
+            writer.write_all(line.as_bytes()).await?;
+        }
+
+        if callers.len() > shown_count {
+            let more_line = format!("  [+{} more]\n", callers.len() - shown_count);
+            writer.write_all(more_line.as_bytes()).await?;
+        }
+
+        writer.write_all(b"\n").await?;
+    }
+
+    Ok(())
 }

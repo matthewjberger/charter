@@ -467,6 +467,8 @@ async fn emit_outputs(
     output::errors::write_errors(&atlas_dir, result, &stamp).await?;
     output::snippets::write_snippets(&atlas_dir, result, &stamp).await?;
     output::safety::write_safety(&atlas_dir, result, &stamp).await?;
+    output::clusters::write_clusters(&atlas_dir, result, &stamp).await?;
+    output::dataflow::write_dataflow(&atlas_dir, result, &stamp).await?;
 
     if !result.skipped.is_empty() {
         output::skipped::write_skipped(&atlas_dir, &result.skipped, &stamp).await?;
