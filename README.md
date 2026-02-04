@@ -325,21 +325,13 @@ Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
 ```markdown
 ## Codebase Context
 
-This project uses charter for structural context. If you've lost track of the codebase:
+This project uses charter for structural context recovery. After context compaction or in a new session, if you've lost track of codebase structure:
 
-- `charter read quick` — API surface and complexity hotspots
-- `charter read` — Standard context with relationships
-- `charter read full` — Complete analysis
+1. Run `charter read` to reload orientation, types, and complexity hotspots
+2. Use `charter lookup <Symbol>` for specific type/function details
+3. Use `charter query "callers of X"` to trace relationships
 
-High-value files in .charter/:
-- `types.md` — Trait definitions, impl map, derive map (best for understanding API)
-- `hotspots.md` — Complexity-ranked functions (where to focus attention)
-- `clusters.md` — Semantically related functions (what works together)
-- `calls.md` — Call graph with reverse lookup (who calls what)
-
-For specific lookups:
-- `charter lookup <Symbol>` — Full context for one symbol
-- `charter query "callers of X"` — Find all callers
+The `.charter/` directory contains pre-computed analysis that's expensive to reconstruct from source: trait hierarchies, call graphs, semantic clusters, and complexity rankings.
 ```
 
 ## Performance

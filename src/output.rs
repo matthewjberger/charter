@@ -217,6 +217,20 @@ fn find_symbol_definition(content: &str, symbol: &str, results: &mut LookupResul
             continue;
         }
 
+        if let Some(found) = find_in_compressed_line(line, symbol) {
+            if !results.found {
+                results.found = true;
+                results.name = symbol.to_string();
+                results.kind = "type".to_string();
+                results.defined_at = found;
+                results.definition_lines.push(
+                    "(compressed — run `charter` with larger budget or read source directly)"
+                        .to_string(),
+                );
+            }
+            continue;
+        }
+
         let is_file_header = !line.starts_with(' ')
             && !line.is_empty()
             && (line.contains(".rs [") || line.contains(".rs:"));
@@ -291,6 +305,26 @@ fn find_symbol_definition(content: &str, symbol: &str, results: &mut LookupResul
             }
         }
     }
+}
+
+fn find_in_compressed_line(line: &str, symbol: &str) -> Option<String> {
+    if !line.contains(" — ") {
+        return None;
+    }
+    let parts: Vec<&str> = line.splitn(2, " — ").collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let dir_part = parts[0].trim();
+    let types_part = parts[1];
+    for type_name in types_part.split(", ") {
+        let type_name = type_name.trim();
+        if type_name == symbol {
+            let dir = dir_part.split('[').next().unwrap_or(dir_part).trim();
+            return Some(format!("{}*.rs", dir));
+        }
+    }
+    None
 }
 
 fn is_symbol_definition_line(line: &str, symbol: &str) -> bool {

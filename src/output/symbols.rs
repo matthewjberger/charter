@@ -246,6 +246,12 @@ fn generate_full_symbols(result: &PipelineResult, context: &SymbolWriteContext) 
     Ok(buffer)
 }
 
+struct CompressedDir {
+    files: usize,
+    lines: usize,
+    type_names: Vec<String>,
+}
+
 fn write_compressed_symbols(
     buffer: &mut Vec<u8>,
     result: &PipelineResult,
@@ -253,7 +259,7 @@ fn write_compressed_symbols(
     budget: usize,
 ) -> Result<()> {
     let mut current_size = 0;
-    let mut compressed_dirs: HashMap<String, (usize, usize, usize)> = HashMap::new();
+    let mut compressed_dirs: HashMap<String, CompressedDir> = HashMap::new();
 
     for file_result in &result.files {
         if !file_result.relative_path.ends_with(".rs") {
@@ -268,10 +274,16 @@ fn write_compressed_symbols(
 
         if depth >= MIN_COMPRESSION_DEPTH && current_size > budget / 2 {
             let dir_path = get_parent_dir(&file_result.relative_path);
-            let entry = compressed_dirs.entry(dir_path).or_insert((0, 0, 0));
-            entry.0 += 1;
-            entry.1 += file_result.lines;
-            entry.2 += file_result.parsed.symbols.symbols.len();
+            let entry = compressed_dirs
+                .entry(dir_path)
+                .or_insert_with(|| CompressedDir {
+                    files: 0,
+                    lines: 0,
+                    type_names: Vec::new(),
+                });
+            entry.files += 1;
+            entry.lines += file_result.lines;
+            collect_type_names(file_result, &mut entry.type_names);
             continue;
         }
 
@@ -283,10 +295,16 @@ fn write_compressed_symbols(
             current_size += file_buffer.len();
         } else {
             let dir_path = get_parent_dir(&file_result.relative_path);
-            let entry = compressed_dirs.entry(dir_path).or_insert((0, 0, 0));
-            entry.0 += 1;
-            entry.1 += file_result.lines;
-            entry.2 += file_result.parsed.symbols.symbols.len();
+            let entry = compressed_dirs
+                .entry(dir_path)
+                .or_insert_with(|| CompressedDir {
+                    files: 0,
+                    lines: 0,
+                    type_names: Vec::new(),
+                });
+            entry.files += 1;
+            entry.lines += file_result.lines;
+            collect_type_names(file_result, &mut entry.type_names);
         }
     }
 
@@ -302,16 +320,41 @@ fn write_compressed_symbols(
         let mut dirs: Vec<_> = compressed_dirs.into_iter().collect();
         dirs.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (dir, (files, lines, symbols)) in dirs {
-            writeln!(
+        for (dir, info) in dirs {
+            write!(
                 buffer,
-                "{}/ [{} files, {} lines, {} symbols]",
-                dir, files, lines, symbols
+                "{}/ [{} files, {} lines]",
+                dir, info.files, info.lines
             )?;
+            if !info.type_names.is_empty() {
+                let types_str = info.type_names.join(", ");
+                if types_str.len() <= 80 {
+                    writeln!(buffer, " — {}", types_str)?;
+                } else {
+                    writeln!(buffer)?;
+                    writeln!(buffer, "  {}", types_str)?;
+                }
+            } else {
+                writeln!(buffer)?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn collect_type_names(file_result: &FileResult, type_names: &mut Vec<String>) {
+    for symbol in &file_result.parsed.symbols.symbols {
+        let is_type = matches!(
+            &symbol.kind,
+            SymbolKind::Struct { .. } | SymbolKind::Enum { .. } | SymbolKind::Trait { .. }
+        );
+        let is_public =
+            symbol.visibility == Visibility::Public || symbol.visibility == Visibility::PubCrate;
+        if is_type && is_public && !type_names.contains(&symbol.name) {
+            type_names.push(symbol.name.clone());
+        }
+    }
 }
 
 fn has_symbols(
