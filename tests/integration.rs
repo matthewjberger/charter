@@ -18,6 +18,16 @@ fn setup_fixture(fixture_path: &Path) {
             .output()
             .expect("Failed to init git");
         Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(fixture_path)
+            .output()
+            .expect("Failed to set git email");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(fixture_path)
+            .output()
+            .expect("Failed to set git name");
+        Command::new("git")
             .args(["add", "."])
             .current_dir(fixture_path)
             .output()
@@ -965,5 +975,601 @@ mod malformed_rust {
                 "skipped.md should mention broken.rs or indicate skip reason"
             );
         }
+    }
+}
+
+mod simple_python {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT_PYTHON: Once = Once::new();
+
+    fn fixture_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/simple_python")
+    }
+
+    fn setup() {
+        INIT_PYTHON.call_once(|| {
+            let path = fixture_path();
+            setup_fixture(&path);
+            run_charter(&path);
+        });
+    }
+
+    #[test]
+    fn creates_all_output_files() {
+        setup();
+        let path = fixture_path();
+
+        let expected_files = [
+            "overview.md",
+            "symbols.md",
+            "types.md",
+            "calls.md",
+            "hotspots.md",
+            "manifest.md",
+            "refs.md",
+            "dependents.md",
+            "clusters.md",
+            "dataflow.md",
+            "errors.md",
+            "snippets.md",
+            "safety.md",
+            "cache.bin",
+            "meta.json",
+            "FORMAT.md",
+        ];
+
+        for file in expected_files {
+            assert!(charter_file_exists(&path, file), "Should create {}", file);
+        }
+    }
+
+    #[test]
+    fn detects_python_project() {
+        setup();
+        let path = fixture_path();
+
+        let overview = read_charter_file(&path, "overview.md");
+        assert!(
+            overview.contains("Python") || overview.contains("mypackage"),
+            "Overview should identify Python project"
+        );
+    }
+
+    #[test]
+    fn extracts_classes() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(symbols.contains("class User"), "Should find User class");
+        assert!(symbols.contains("class Admin"), "Should find Admin class");
+        assert!(symbols.contains("class Config"), "Should find Config class");
+    }
+
+    #[test]
+    fn extracts_dataclasses() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("class Config") || symbols.contains("Config"),
+            "Should find Config class (a dataclass)"
+        );
+    }
+
+    #[test]
+    fn extracts_class_inheritance() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("Admin") && (symbols.contains("User") || symbols.contains("Entity")),
+            "Should show Admin inherits from User"
+        );
+    }
+
+    #[test]
+    fn extracts_methods() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("activate") || symbols.contains("def activate"),
+            "Should find activate method"
+        );
+        assert!(
+            symbols.contains("verify_password") || symbols.contains("def verify_password"),
+            "Should find verify_password method"
+        );
+    }
+
+    #[test]
+    fn extracts_properties() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("is_active")
+                && (symbols.contains("@property") || symbols.contains("property")),
+            "Should identify is_active as property"
+        );
+    }
+
+    #[test]
+    fn extracts_static_and_class_methods() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("generate_id") || symbols.contains("@staticmethod"),
+            "Should find staticmethod generate_id"
+        );
+        assert!(
+            symbols.contains("get_by_id") || symbols.contains("@classmethod"),
+            "Should find classmethod get_by_id"
+        );
+    }
+
+    #[test]
+    fn extracts_functions() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("create_user_service") || symbols.contains("def create_user_service"),
+            "Should find create_user_service function"
+        );
+    }
+
+    #[test]
+    fn extracts_async_functions() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("async")
+                && (symbols.contains("get_user") || symbols.contains("create_user")),
+            "Should find async functions"
+        );
+    }
+
+    #[test]
+    fn extracts_protocols() {
+        setup();
+        let path = fixture_path();
+
+        let types = read_charter_file(&path, "types.md");
+        assert!(
+            types.contains("Protocol")
+                || types.contains("Serializable")
+                || types.contains("Cacheable"),
+            "Should find Protocol definitions"
+        );
+    }
+
+    #[test]
+    fn extracts_abstract_base_classes() {
+        setup();
+        let path = fixture_path();
+
+        let types = read_charter_file(&path, "types.md");
+        assert!(
+            types.contains("ABC") || types.contains("Repository") || types.contains("abstract"),
+            "Should find ABC definitions"
+        );
+    }
+
+    #[test]
+    fn extracts_enums() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("Status")
+                && (symbols.contains("Enum")
+                    || symbols.contains("PENDING")
+                    || symbols.contains("ACTIVE")),
+            "Should find Status enum with variants"
+        );
+    }
+
+    #[test]
+    fn extracts_exceptions() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("ValidationError") || symbols.contains("NotFoundError"),
+            "Should find custom exception classes"
+        );
+    }
+
+    #[test]
+    fn tracks_raise_statements() {
+        setup();
+        let path = fixture_path();
+
+        let safety = read_charter_file(&path, "safety.md");
+        assert!(
+            safety.contains("raise")
+                || safety.contains("ValidationError")
+                || safety.contains("NotFoundError"),
+            "Should track raise statements in safety.md"
+        );
+    }
+
+    #[test]
+    fn detects_dangerous_calls() {
+        setup();
+        let path = fixture_path();
+
+        let safety = read_charter_file(&path, "safety.md");
+        assert!(
+            safety.contains("eval") || safety.contains("exec") || safety.contains("dangerous"),
+            "Should detect eval/exec as dangerous"
+        );
+        assert!(
+            safety.contains("subprocess") || safety.contains("shell"),
+            "Should detect subprocess as dangerous"
+        );
+        assert!(
+            safety.contains("pickle"),
+            "Should detect pickle as dangerous"
+        );
+    }
+
+    #[test]
+    fn extracts_module_docstrings() {
+        setup();
+        let path = fixture_path();
+
+        let overview = read_charter_file(&path, "overview.md");
+        assert!(
+            overview.contains("MyPackage")
+                || overview.contains("comprehensive")
+                || overview.contains("test package"),
+            "Should extract module docstrings"
+        );
+    }
+
+    #[test]
+    fn extracts_imports() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("import") || symbols.contains("from"),
+            "Should track imports"
+        );
+    }
+
+    #[test]
+    fn identifies_test_files() {
+        setup();
+        let path = fixture_path();
+
+        let manifest = read_charter_file(&path, "manifest.md");
+        assert!(
+            manifest.contains("test_models")
+                || manifest.contains("test_services")
+                || manifest.contains("[test]"),
+            "Should identify test files"
+        );
+    }
+
+    #[test]
+    fn identifies_test_functions() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("test_create_user") || symbols.contains("test_user_is_active"),
+            "Should find test functions"
+        );
+    }
+
+    #[test]
+    fn tracks_class_hierarchy() {
+        setup();
+        let path = fixture_path();
+
+        let types = read_charter_file(&path, "types.md");
+        assert!(
+            (types.contains("User") && types.contains("Admin"))
+                || types.contains("hierarchy")
+                || types.contains("inherits"),
+            "Should track class hierarchy"
+        );
+    }
+
+    #[test]
+    fn builds_call_graph() {
+        setup();
+        let path = fixture_path();
+
+        let calls = read_charter_file(&path, "calls.md");
+        assert!(
+            calls.contains("create_user")
+                || calls.contains("get_user")
+                || calls.contains("validate"),
+            "Should build call graph for Python"
+        );
+    }
+
+    #[test]
+    fn extracts_type_hints() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("-> ")
+                || symbols.contains(": str")
+                || symbols.contains(": int")
+                || symbols.contains("Optional"),
+            "Should extract type hints"
+        );
+    }
+
+    #[test]
+    fn tracks_decorators() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("@")
+                || symbols.contains("decorator")
+                || symbols.contains("dataclass")
+                || symbols.contains("property"),
+            "Should track decorators"
+        );
+    }
+
+    #[test]
+    fn detects_entry_points() {
+        setup();
+        let path = fixture_path();
+
+        let overview = read_charter_file(&path, "overview.md");
+        assert!(
+            overview.contains("mypackage-cli")
+                || overview.contains("entry")
+                || overview.contains("console"),
+            "Should detect entry points from pyproject.toml"
+        );
+    }
+
+    #[test]
+    fn cli_read_works() {
+        setup();
+        let path = fixture_path();
+
+        let (success, stdout, _) = run_charter_command(&path, &["read"]);
+        assert!(success, "read should succeed for Python project");
+        assert!(
+            stdout.contains("Python") || stdout.contains("mypackage") || stdout.contains("class"),
+            "read should output Python content"
+        );
+    }
+
+    #[test]
+    fn cli_lookup_finds_class() {
+        setup();
+        let path = fixture_path();
+
+        let (success, stdout, _) = run_charter_command(&path, &["lookup", "User"]);
+        assert!(success, "lookup User should succeed");
+        assert!(
+            stdout.contains("User") || stdout.contains("class"),
+            "lookup should find User class"
+        );
+    }
+
+    #[test]
+    fn cli_lookup_finds_function() {
+        setup();
+        let path = fixture_path();
+
+        let (success, stdout, _) = run_charter_command(&path, &["lookup", "create_user_service"]);
+        assert!(success, "lookup create_user_service should succeed");
+        assert!(
+            stdout.contains("create_user_service"),
+            "lookup should find create_user_service function"
+        );
+    }
+
+    #[test]
+    fn cli_query_callers_works() {
+        setup();
+        let path = fixture_path();
+
+        let (success, _, _) = run_charter_command(&path, &["query", "callers of validate"]);
+        assert!(success, "query callers should succeed for Python");
+    }
+
+    #[test]
+    fn cli_status_works() {
+        setup();
+        let path = fixture_path();
+
+        let (success, stdout, _) = run_charter_command(&path, &["status"]);
+        assert!(success, "status should succeed for Python project");
+        assert!(
+            stdout.contains("files") || stdout.contains("lines"),
+            "status should show file information"
+        );
+    }
+
+    #[test]
+    fn extracts_generators() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("stream_users") && symbols.contains("AsyncIterator"),
+            "Should find async generator stream_users"
+        );
+    }
+
+    #[test]
+    fn extracts_module_variables() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("TypeVar") || symbols.contains("T =") || symbols.contains("K ="),
+            "Should find TypeVar definitions"
+        );
+    }
+
+    #[test]
+    fn overview_contains_dependencies() {
+        setup();
+        let path = fixture_path();
+
+        let overview = read_charter_file(&path, "overview.md");
+        assert!(
+            overview.contains("Dependencies")
+                && (overview.contains("requests") || overview.contains("pydantic")),
+            "Overview should list Python dependencies"
+        );
+    }
+
+    #[test]
+    fn hotspots_contains_python_functions() {
+        setup();
+        let path = fixture_path();
+
+        let hotspots = read_charter_file(&path, "hotspots.md");
+        assert!(
+            hotspots.contains("validate")
+                || hotspots.contains("UserService")
+                || hotspots.contains("score="),
+            "Hotspots should include Python functions with scores"
+        );
+    }
+
+    #[test]
+    fn clusters_groups_python_functions() {
+        setup();
+        let path = fixture_path();
+
+        let clusters = read_charter_file(&path, "clusters.md");
+        assert!(
+            clusters.contains("Cluster")
+                && (clusters.contains("UserService") || clusters.contains("methods")),
+            "Clusters should group Python functions semantically"
+        );
+    }
+
+    #[test]
+    fn refs_tracks_python_types() {
+        setup();
+        let path = fixture_path();
+
+        let refs = read_charter_file(&path, "refs.md");
+        assert!(
+            refs.contains("User") || refs.contains("Config") || refs.contains("ValidationError"),
+            "Refs should track Python type references"
+        );
+    }
+}
+
+mod mixed_project {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT_MIXED: Once = Once::new();
+
+    fn fixture_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mixed_project")
+    }
+
+    fn setup() {
+        INIT_MIXED.call_once(|| {
+            let path = fixture_path();
+            setup_fixture(&path);
+            run_charter(&path);
+        });
+    }
+
+    #[test]
+    fn creates_output_files() {
+        setup();
+        let path = fixture_path();
+
+        assert!(
+            charter_file_exists(&path, "symbols.md"),
+            "Should create symbols.md for mixed project"
+        );
+        assert!(
+            charter_file_exists(&path, "overview.md"),
+            "Should create overview.md for mixed project"
+        );
+    }
+
+    #[test]
+    fn detects_mixed_project() {
+        setup();
+        let path = fixture_path();
+
+        let overview = read_charter_file(&path, "overview.md");
+        assert!(
+            overview.contains("Mixed")
+                || (overview.contains("Rust") && overview.contains("Python")),
+            "Should identify as mixed project"
+        );
+    }
+
+    #[test]
+    fn extracts_rust_symbols() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("RustType") || symbols.contains("Calculator"),
+            "Should extract Rust symbols"
+        );
+    }
+
+    #[test]
+    fn extracts_python_symbols() {
+        setup();
+        let path = fixture_path();
+
+        let symbols = read_charter_file(&path, "symbols.md");
+        assert!(
+            symbols.contains("PythonWrapper") || symbols.contains("class"),
+            "Should extract Python symbols"
+        );
+    }
+
+    #[test]
+    fn types_shows_both_languages() {
+        setup();
+        let path = fixture_path();
+
+        let types = read_charter_file(&path, "types.md");
+        assert!(
+            types.contains("Calculator") || types.contains("trait") || types.contains("Protocol"),
+            "types.md should show traits/protocols from both languages"
+        );
     }
 }

@@ -94,8 +94,24 @@ pub(crate) fn file_role(path: &Path) -> &'static str {
         return "[build]";
     }
 
-    if file_name.ends_with("_test.rs") || file_name.ends_with("_tests.rs") {
+    if file_name == "pyproject.toml" || file_name == "setup.py" || file_name == "setup.cfg" {
+        return "[build]";
+    }
+
+    if file_name == "conftest.py" {
+        return "[test-config]";
+    }
+
+    if file_name.ends_with("_test.rs")
+        || file_name.ends_with("_tests.rs")
+        || file_name.starts_with("test_")
+        || file_name.ends_with("_test.py")
+    {
         return "[test]";
+    }
+
+    if file_name.ends_with(".pyi") {
+        return "[stub]";
     }
 
     let path_str = path.to_string_lossy();
@@ -111,8 +127,14 @@ pub(crate) fn file_role(path: &Path) -> &'static str {
         return "[example]";
     }
 
+    if path_str.contains("/__pycache__/") {
+        return "[cache]";
+    }
+
     match extension {
         "rs" => "[source]",
+        "py" => "[source]",
+        "pyi" => "[stub]",
         "md" => "[docs]",
         "toml" => "[config]",
         "json" => "[config]",

@@ -60,19 +60,39 @@ fn build_module_tree(result: &PipelineResult) -> HashMap<String, String> {
     let mut tree: HashMap<String, String> = HashMap::new();
 
     for file in &result.files {
-        if !file.relative_path.ends_with(".rs") {
-            continue;
-        }
-
-        let crate_prefix = extract_crate_prefix(&file.relative_path);
-        let module_path = file_path_to_module_path(&file.relative_path);
-        if !module_path.is_empty() {
-            let full_key = format!("{}:{}", crate_prefix, module_path);
-            tree.insert(full_key, file.relative_path.clone());
+        if file.relative_path.ends_with(".rs") {
+            let crate_prefix = extract_crate_prefix(&file.relative_path);
+            let module_path = file_path_to_module_path(&file.relative_path);
+            if !module_path.is_empty() {
+                let full_key = format!("{}:{}", crate_prefix, module_path);
+                tree.insert(full_key, file.relative_path.clone());
+            }
+        } else if file.relative_path.ends_with(".py") {
+            let module_path = python_file_to_module_path(&file.relative_path);
+            if !module_path.is_empty() {
+                tree.insert(module_path, file.relative_path.clone());
+            }
         }
     }
 
     tree
+}
+
+fn python_file_to_module_path(file_path: &str) -> String {
+    let path = file_path
+        .strip_prefix("src/")
+        .or_else(|| file_path.strip_prefix("lib/"))
+        .or_else(|| file_path.strip_prefix("Lib/"))
+        .unwrap_or(file_path);
+
+    let path = path
+        .strip_suffix(".py")
+        .or_else(|| path.strip_suffix(".pyi"))
+        .unwrap_or(path);
+
+    let path = path.strip_suffix("/__init__").unwrap_or(path);
+
+    path.replace('/', ".")
 }
 
 fn extract_crate_prefix(file_path: &str) -> String {
@@ -162,38 +182,67 @@ fn resolve_import_to_files(
 ) -> Vec<String> {
     let mut results = Vec::new();
 
-    let crate_prefix = extract_crate_prefix(importing_file);
-    let normalized = normalize_import_path(import_path, importing_file);
+    let is_python = importing_file.ends_with(".py") || importing_file.ends_with(".pyi");
 
-    for candidate in &normalized {
-        let full_key = format!("{}:{}", crate_prefix, candidate);
-        if let Some(file) = module_tree.get(&full_key) {
+    if is_python {
+        let normalized = import_path.replace("::", ".");
+        if let Some(file) = module_tree.get(&normalized) {
             results.push(file.clone());
-            break;
         }
-    }
 
-    if results.is_empty() {
-        for candidate in &normalized {
-            let prefix = format!("{}:{}::", crate_prefix, candidate);
-            for (module_path, file_path) in module_tree {
-                if module_path.starts_with(&prefix) {
-                    results.push(file_path.clone());
-                    break;
-                }
-            }
-            if !results.is_empty() {
+        for prefix_len in (1..=normalized.matches('.').count()).rev() {
+            let prefix: String = normalized
+                .split('.')
+                .take(prefix_len + 1)
+                .collect::<Vec<_>>()
+                .join(".");
+            if let Some(file) = module_tree.get(&prefix) {
+                results.push(file.clone());
                 break;
             }
         }
-    }
 
-    if results.is_empty() {
+        if results.is_empty() {
+            for (module_path, file_path) in module_tree {
+                if module_path.starts_with(&normalized) || normalized.starts_with(module_path) {
+                    results.push(file_path.clone());
+                }
+            }
+        }
+    } else {
+        let crate_prefix = extract_crate_prefix(importing_file);
+        let normalized = normalize_import_path(import_path, importing_file);
+
         for candidate in &normalized {
-            let file_candidates = module_path_to_possible_files(candidate);
-            for fc in file_candidates {
-                if result.files.iter().any(|f| f.relative_path == fc) {
-                    results.push(fc);
+            let full_key = format!("{}:{}", crate_prefix, candidate);
+            if let Some(file) = module_tree.get(&full_key) {
+                results.push(file.clone());
+                break;
+            }
+        }
+
+        if results.is_empty() {
+            for candidate in &normalized {
+                let prefix = format!("{}:{}::", crate_prefix, candidate);
+                for (module_path, file_path) in module_tree {
+                    if module_path.starts_with(&prefix) {
+                        results.push(file_path.clone());
+                        break;
+                    }
+                }
+                if !results.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        if results.is_empty() {
+            for candidate in &normalized {
+                let file_candidates = module_path_to_possible_files(candidate);
+                for fc in file_candidates {
+                    if result.files.iter().any(|f| f.relative_path == fc) {
+                        results.push(fc);
+                    }
                 }
             }
         }

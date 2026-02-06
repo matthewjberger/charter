@@ -1,6 +1,6 @@
 mod parse;
 mod read;
-mod walk;
+pub mod walk;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -240,7 +240,7 @@ fn quick_change_check_sync(root: &Path, files: &[PathBuf], cache: &Cache) -> Opt
     Some(changed)
 }
 
-async fn run_phase1_with_walk(
+pub async fn run_phase1_with_walk(
     root: &Path,
     workspace: &WorkspaceInfo,
     cache: &Cache,
@@ -374,10 +374,15 @@ async fn process_file(path: &Path, root: &Path, cache: &Cache) -> Result<Option<
 
     let lines = count_lines(&content);
 
+    let language = match crate::extract::language::Language::from_path(path) {
+        Some(lang) => lang,
+        None => return Ok(None),
+    };
+
     let content_string = String::from_utf8_lossy(&content).into_owned();
     let relative_path_clone = relative_path.clone();
     let parsed = tokio::task::spawn_blocking(move || {
-        parse::parse_rust_file(&content_string, &relative_path_clone)
+        parse::parse_file(&content_string, &relative_path_clone, language)
     })
     .await??;
 
@@ -392,7 +397,7 @@ async fn process_file(path: &Path, root: &Path, cache: &Cache) -> Result<Option<
     }))
 }
 
-fn build_symbol_table(files: &[FileResult]) -> HashMap<String, (String, usize)> {
+pub fn build_symbol_table(files: &[FileResult]) -> HashMap<String, (String, usize)> {
     let mut table = HashMap::new();
 
     for file in files {
@@ -409,7 +414,7 @@ fn build_symbol_table(files: &[FileResult]) -> HashMap<String, (String, usize)> 
     table
 }
 
-fn run_phase2(
+pub fn run_phase2(
     files: &[FileResult],
     symbol_table: &HashMap<String, (String, usize)>,
 ) -> HashMap<String, Vec<(String, usize)>> {

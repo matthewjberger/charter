@@ -59,7 +59,13 @@ pub async fn write_snippets(
             );
             writer.write_all(header.as_bytes()).await?;
 
-            writer.write_all(b"```rust\n").await?;
+            let lang = if file_path.ends_with(".py") || file_path.ends_with(".pyi") {
+                "python"
+            } else {
+                "rust"
+            };
+            let fence_start = format!("```{}\n", lang);
+            writer.write_all(fence_start.as_bytes()).await?;
             if let Some(ref text) = body.body.full_text {
                 writer.write_all(text.as_bytes()).await?;
             }

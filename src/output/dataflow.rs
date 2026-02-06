@@ -154,7 +154,9 @@ fn build_type_flows(result: &PipelineResult) -> HashMap<String, TypeFlow> {
         .iter()
         .flat_map(|f| &f.parsed.symbols.symbols)
         .filter_map(|s| match &s.kind {
-            SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => Some(s.name.clone()),
+            SymbolKind::Struct { .. } | SymbolKind::Enum { .. } | SymbolKind::Class { .. } => {
+                Some(s.name.clone())
+            }
             _ => None,
         })
         .collect();
@@ -317,9 +319,9 @@ fn build_cross_module_flows(result: &PipelineResult) -> Vec<CrossModuleFlow> {
                 .symbols
                 .iter()
                 .filter_map(|s| match &s.kind {
-                    SymbolKind::Struct { .. } | SymbolKind::Enum { .. } => {
-                        Some((s.name.clone(), f.relative_path.clone()))
-                    }
+                    SymbolKind::Struct { .. }
+                    | SymbolKind::Enum { .. }
+                    | SymbolKind::Class { .. } => Some((s.name.clone(), f.relative_path.clone())),
                     _ => None,
                 })
         })

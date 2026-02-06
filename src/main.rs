@@ -1,6 +1,6 @@
 use anyhow::Result;
 use charter::cli::{Cli, Commands, SessionAction};
-use charter::{deps, detect, output, pipeline, query, session, tests};
+use charter::{deps, detect, output, pipeline, query, serve, session, tests};
 use clap::Parser;
 
 #[tokio::main]
@@ -59,6 +59,10 @@ async fn main() -> Result<()> {
                 session::session_status(&root).await?;
             }
         },
+        Some(Commands::Serve { path }) => {
+            let root = detect::find_project_root(path).await?;
+            serve::serve(&root).await?;
+        }
     }
 
     Ok(())

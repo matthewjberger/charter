@@ -70,6 +70,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
+    #[command(about = "Start MCP server over stdio")]
+    Serve {
+        #[arg(help = "Project root (default: auto-detect from cwd)")]
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

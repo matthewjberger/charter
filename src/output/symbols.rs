@@ -6,7 +6,8 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
 use crate::extract::symbols::{
-    EnumVariant, ImplMethod, InherentImpl, Symbol, SymbolKind, VariantPayload, Visibility,
+    ClassMethod, EnumVariant, ImplMethod, InherentImpl, Parameter, ParameterKind, Symbol,
+    SymbolKind, VariantPayload, Visibility,
 };
 use crate::pipeline::{FileResult, PipelineResult};
 
@@ -236,7 +237,11 @@ fn generate_full_symbols(result: &PipelineResult, context: &SymbolWriteContext) 
     let mut buffer = Vec::with_capacity(256 * 1024);
 
     for file_result in &result.files {
-        if !file_result.relative_path.ends_with(".rs") {
+        let is_rust = file_result.relative_path.ends_with(".rs");
+        let is_python = file_result.relative_path.ends_with(".py")
+            || file_result.relative_path.ends_with(".pyi");
+
+        if !is_rust && !is_python {
             continue;
         }
 
@@ -262,7 +267,11 @@ fn write_compressed_symbols(
     let mut compressed_dirs: HashMap<String, CompressedDir> = HashMap::new();
 
     for file_result in &result.files {
-        if !file_result.relative_path.ends_with(".rs") {
+        let is_rust = file_result.relative_path.ends_with(".rs");
+        let is_python = file_result.relative_path.ends_with(".py")
+            || file_result.relative_path.ends_with(".pyi");
+
+        if !is_rust && !is_python {
             continue;
         }
 
@@ -347,7 +356,10 @@ fn collect_type_names(file_result: &FileResult, type_names: &mut Vec<String>) {
     for symbol in &file_result.parsed.symbols.symbols {
         let is_type = matches!(
             &symbol.kind,
-            SymbolKind::Struct { .. } | SymbolKind::Enum { .. } | SymbolKind::Trait { .. }
+            SymbolKind::Struct { .. }
+                | SymbolKind::Enum { .. }
+                | SymbolKind::Trait { .. }
+                | SymbolKind::Class { .. }
         );
         let is_public =
             symbol.visibility == Visibility::Public || symbol.visibility == Visibility::PubCrate;
@@ -472,14 +484,15 @@ fn is_important_symbol(symbol: &Symbol) -> bool {
         SymbolKind::Struct { .. }
         | SymbolKind::Enum { .. }
         | SymbolKind::Trait { .. }
-        | SymbolKind::TypeAlias { .. } => true,
-        SymbolKind::Function { .. } => {
+        | SymbolKind::TypeAlias { .. }
+        | SymbolKind::Class { .. } => true,
+        SymbolKind::Function { .. } | SymbolKind::PythonFunction { .. } => {
             symbol.visibility == Visibility::Public || symbol.visibility == Visibility::PubCrate
         }
-        SymbolKind::Const { .. } | SymbolKind::Static { .. } => {
+        SymbolKind::Const { .. } | SymbolKind::Static { .. } | SymbolKind::Variable { .. } => {
             symbol.visibility == Visibility::Public
         }
-        SymbolKind::Mod => symbol.visibility == Visibility::Public,
+        SymbolKind::Mod | SymbolKind::PythonModule => symbol.visibility == Visibility::Public,
     }
 }
 
@@ -529,7 +542,12 @@ fn write_symbol(
     current_file: &str,
     all_inherent_impls: &HashMap<String, Vec<(String, InherentImpl)>>,
 ) -> Result<()> {
-    let vis = symbol.visibility.prefix();
+    let is_python = current_file.ends_with(".py") || current_file.ends_with(".pyi");
+    let vis = if is_python {
+        symbol.visibility.python_prefix()
+    } else {
+        symbol.visibility.prefix()
+    };
     let qualifiers = super::format_qualifiers(symbol.is_async, symbol.is_unsafe, symbol.is_const);
 
     match &symbol.kind {
@@ -675,6 +693,64 @@ fn write_symbol(
         SymbolKind::Mod => {
             writeln!(buffer, "  {}mod {}", vis, symbol.name)?;
         }
+        SymbolKind::Class {
+            bases,
+            fields,
+            methods,
+            decorators,
+            is_dataclass,
+            is_protocol,
+            is_abc,
+        } => {
+            write_python_class(
+                buffer,
+                symbol,
+                bases,
+                fields,
+                methods,
+                decorators,
+                *is_dataclass,
+                *is_protocol,
+                *is_abc,
+            )?;
+        }
+        SymbolKind::PythonFunction {
+            parameters,
+            return_type,
+            decorators,
+            is_generator,
+            is_classmethod,
+            is_staticmethod,
+            is_property,
+            docstring,
+        } => {
+            write_python_function(
+                buffer,
+                symbol,
+                parameters,
+                return_type.as_deref(),
+                decorators,
+                *is_generator,
+                *is_classmethod,
+                *is_staticmethod,
+                *is_property,
+                docstring.as_deref(),
+            )?;
+        }
+        SymbolKind::Variable { type_hint, value } => {
+            write!(buffer, "  {}{}", vis, symbol.name)?;
+            if let Some(hint) = type_hint {
+                write!(buffer, ": {}", hint)?;
+            }
+            if let Some(val) = value {
+                writeln!(buffer, " = {}", val)?;
+            } else {
+                writeln!(buffer)?;
+            }
+        }
+        SymbolKind::PythonModule => {
+            writeln!(buffer, "  {}module {}", vis, symbol.name)?;
+        }
     }
 
     if let Some(re_export) = &symbol.re_exported_as {
@@ -682,6 +758,195 @@ fn write_symbol(
     }
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_python_class(
+    buffer: &mut Vec<u8>,
+    symbol: &Symbol,
+    bases: &[String],
+    fields: &[crate::extract::symbols::ClassField],
+    methods: &[ClassMethod],
+    decorators: &[crate::extract::symbols::DecoratorInfo],
+    is_dataclass: bool,
+    is_protocol: bool,
+    is_abc: bool,
+) -> Result<()> {
+    let vis = symbol.visibility.python_prefix();
+
+    for decorator in decorators {
+        if let Some(args) = &decorator.arguments {
+            writeln!(buffer, "  @{}({})", decorator.name, args)?;
+        } else {
+            writeln!(buffer, "  @{}", decorator.name)?;
+        }
+    }
+
+    write!(buffer, "  {}class {}", vis, symbol.name)?;
+
+    if !bases.is_empty() {
+        write!(buffer, "({})", bases.join(", "))?;
+    }
+
+    let mut markers = Vec::new();
+    if is_dataclass {
+        markers.push("dataclass");
+    }
+    if is_protocol {
+        markers.push("Protocol");
+    }
+    if is_abc {
+        markers.push("ABC");
+    }
+    if !markers.is_empty() {
+        write!(buffer, " [{}]", markers.join(", "))?;
+    }
+
+    writeln!(buffer)?;
+
+    for field in fields {
+        write!(buffer, "    {}", field.name)?;
+        if let Some(hint) = &field.type_hint {
+            write!(buffer, ": {}", hint)?;
+        }
+        if let Some(default) = &field.default_value {
+            write!(buffer, " = {}", default)?;
+        }
+        if field.is_class_var {
+            write!(buffer, " (ClassVar)")?;
+        }
+        writeln!(buffer)?;
+    }
+
+    for method in methods {
+        write_class_method(buffer, method)?;
+    }
+
+    Ok(())
+}
+
+fn write_class_method(buffer: &mut Vec<u8>, method: &ClassMethod) -> Result<()> {
+    let vis = method.visibility.python_prefix();
+
+    let mut qualifiers = Vec::new();
+    if method.is_async {
+        qualifiers.push("async");
+    }
+    if method.is_classmethod {
+        qualifiers.push("@classmethod");
+    }
+    if method.is_staticmethod {
+        qualifiers.push("@staticmethod");
+    }
+    if method.is_property {
+        qualifiers.push("@property");
+    }
+    if method.is_abstract {
+        qualifiers.push("@abstractmethod");
+    }
+
+    let qualifier_str = if qualifiers.is_empty() {
+        String::new()
+    } else {
+        format!("{} ", qualifiers.join(" "))
+    };
+
+    writeln!(
+        buffer,
+        "    {}{}def {}{}",
+        vis, qualifier_str, method.name, method.signature
+    )?;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_python_function(
+    buffer: &mut Vec<u8>,
+    symbol: &Symbol,
+    parameters: &[Parameter],
+    return_type: Option<&str>,
+    decorators: &[crate::extract::symbols::DecoratorInfo],
+    is_generator: bool,
+    is_classmethod: bool,
+    is_staticmethod: bool,
+    is_property: bool,
+    _docstring: Option<&str>,
+) -> Result<()> {
+    let vis = symbol.visibility.python_prefix();
+
+    for decorator in decorators {
+        if let Some(args) = &decorator.arguments {
+            writeln!(buffer, "  @{}({})", decorator.name, args)?;
+        } else {
+            writeln!(buffer, "  @{}", decorator.name)?;
+        }
+    }
+
+    let mut qualifiers = Vec::new();
+    if symbol.is_async {
+        qualifiers.push("async");
+    }
+    if is_generator {
+        qualifiers.push("generator");
+    }
+    if is_classmethod {
+        qualifiers.push("@classmethod");
+    }
+    if is_staticmethod {
+        qualifiers.push("@staticmethod");
+    }
+    if is_property {
+        qualifiers.push("@property");
+    }
+
+    let qualifier_str = if qualifiers.is_empty() {
+        String::new()
+    } else {
+        format!("{} ", qualifiers.join(" "))
+    };
+
+    let params_str = format_python_parameters(parameters);
+
+    write!(
+        buffer,
+        "  {}{}def {}({})",
+        vis, qualifier_str, symbol.name, params_str
+    )?;
+
+    if let Some(ret) = return_type {
+        write!(buffer, " -> {}", ret)?;
+    }
+
+    writeln!(buffer)?;
+
+    Ok(())
+}
+
+fn format_python_parameters(parameters: &[Parameter]) -> String {
+    parameters
+        .iter()
+        .map(|p| {
+            let mut param_str = match p.kind {
+                ParameterKind::Args => format!("*{}", p.name),
+                ParameterKind::Kwargs => format!("**{}", p.name),
+                _ => p.name.clone(),
+            };
+
+            if let Some(hint) = &p.type_hint {
+                param_str.push_str(": ");
+                param_str.push_str(hint);
+            }
+
+            if let Some(default) = &p.default_value {
+                param_str.push_str(" = ");
+                param_str.push_str(default);
+            }
+
+            param_str
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn write_inherent_impls_for_type(

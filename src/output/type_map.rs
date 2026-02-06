@@ -84,6 +84,223 @@ fn write_trait_definitions(buffer: &mut Vec<u8>, result: &PipelineResult) -> Res
         writeln!(buffer)?;
     }
 
+    write_python_protocols(buffer, result)?;
+    write_python_abcs(buffer, result)?;
+    write_python_type_vars(buffer, result)?;
+    write_python_dataclasses(buffer, result)?;
+    write_class_hierarchy(buffer, result)?;
+
+    Ok(())
+}
+
+fn write_python_protocols(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
+    let mut protocols: Vec<(&str, &str, &[crate::extract::symbols::ClassMethod])> = Vec::new();
+
+    for file_result in &result.files {
+        for symbol in &file_result.parsed.symbols.symbols {
+            if let SymbolKind::Class {
+                methods,
+                is_protocol: true,
+                ..
+            } = &symbol.kind
+            {
+                protocols.push((&file_result.relative_path, &symbol.name, methods));
+            }
+        }
+    }
+
+    if protocols.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(buffer, "Protocols (Python):")?;
+    for (path, name, methods) in protocols {
+        writeln!(buffer, "  {} ({})", name, path)?;
+        for method in methods {
+            if method.is_abstract {
+                writeln!(
+                    buffer,
+                    "    required def {}{}",
+                    method.name, method.signature
+                )?;
+            } else {
+                writeln!(
+                    buffer,
+                    "    default def {}{}",
+                    method.name, method.signature
+                )?;
+            }
+        }
+    }
+    writeln!(buffer)?;
+
+    Ok(())
+}
+
+fn write_python_abcs(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
+    let mut abcs: Vec<(&str, &str, &[crate::extract::symbols::ClassMethod])> = Vec::new();
+
+    for file_result in &result.files {
+        for symbol in &file_result.parsed.symbols.symbols {
+            if let SymbolKind::Class {
+                methods,
+                is_abc: true,
+                is_protocol: false,
+                ..
+            } = &symbol.kind
+            {
+                abcs.push((&file_result.relative_path, &symbol.name, methods));
+            }
+        }
+    }
+
+    if abcs.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(buffer, "Abstract Base Classes (Python):")?;
+    for (path, name, methods) in abcs {
+        writeln!(buffer, "  {} ({})", name, path)?;
+        for method in methods {
+            if method.is_abstract {
+                writeln!(
+                    buffer,
+                    "    @abstractmethod def {}{}",
+                    method.name, method.signature
+                )?;
+            }
+        }
+    }
+    writeln!(buffer)?;
+
+    Ok(())
+}
+
+fn write_python_type_vars(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
+    let mut type_vars: Vec<(String, String, String)> = Vec::new();
+
+    for file_result in &result.files {
+        if !file_result.relative_path.ends_with(".py")
+            && !file_result.relative_path.ends_with(".pyi")
+        {
+            continue;
+        }
+
+        for symbol in &file_result.parsed.symbols.symbols {
+            if let SymbolKind::Variable {
+                value: Some(val), ..
+            } = &symbol.kind
+            {
+                if val.contains("TypeVar(") {
+                    type_vars.push((
+                        file_result.relative_path.clone(),
+                        symbol.name.clone(),
+                        val.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if type_vars.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(buffer, "Type Variables (Python):")?;
+    for (path, name, value) in type_vars.iter().take(50) {
+        let short_value = if value.len() > 60 {
+            format!("{}...", &value[..57])
+        } else {
+            value.clone()
+        };
+        writeln!(buffer, "  {} = {} ({})", name, short_value, path)?;
+    }
+    if type_vars.len() > 50 {
+        writeln!(buffer, "  [+{} more]", type_vars.len() - 50)?;
+    }
+    writeln!(buffer)?;
+
+    Ok(())
+}
+
+fn write_python_dataclasses(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
+    let mut dataclasses: Vec<(String, String, Vec<String>)> = Vec::new();
+
+    for file_result in &result.files {
+        for symbol in &file_result.parsed.symbols.symbols {
+            if let SymbolKind::Class {
+                fields,
+                is_dataclass: true,
+                ..
+            } = &symbol.kind
+            {
+                let field_names: Vec<String> = fields
+                    .iter()
+                    .map(|f| {
+                        if let Some(hint) = &f.type_hint {
+                            format!("{}: {}", f.name, hint)
+                        } else {
+                            f.name.clone()
+                        }
+                    })
+                    .collect();
+                dataclasses.push((
+                    file_result.relative_path.clone(),
+                    symbol.name.clone(),
+                    field_names,
+                ));
+            }
+        }
+    }
+
+    if dataclasses.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(buffer, "Dataclasses (Python):")?;
+    for (path, name, fields) in dataclasses.iter().take(30) {
+        writeln!(buffer, "  @dataclass {} ({})", name, path)?;
+        for field in fields.iter().take(10) {
+            writeln!(buffer, "    {}", field)?;
+        }
+        if fields.len() > 10 {
+            writeln!(buffer, "    [+{} more fields]", fields.len() - 10)?;
+        }
+    }
+    if dataclasses.len() > 30 {
+        writeln!(buffer, "  [+{} more dataclasses]", dataclasses.len() - 30)?;
+    }
+    writeln!(buffer)?;
+
+    Ok(())
+}
+
+fn write_class_hierarchy(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
+    let mut class_bases: HashMap<String, Vec<String>> = HashMap::new();
+
+    for file_result in &result.files {
+        for symbol in &file_result.parsed.symbols.symbols {
+            if let SymbolKind::Class { bases, .. } = &symbol.kind {
+                if !bases.is_empty() {
+                    class_bases.insert(symbol.name.clone(), bases.clone());
+                }
+            }
+        }
+    }
+
+    if class_bases.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(buffer, "Class Hierarchy (Python):")?;
+    let mut sorted: Vec<_> = class_bases.into_iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (class_name, bases) in sorted {
+        writeln!(buffer, "  {} extends {}", class_name, bases.join(", "))?;
+    }
+    writeln!(buffer)?;
+
     Ok(())
 }
 

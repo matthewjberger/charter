@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 pub struct ImportInfo {
     pub path: String,
     pub line: usize,
+    pub kind: ImportKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub enum ImportKind {
+    #[default]
+    RustUse,
+    PythonImport {
+        module: String,
+    },
+    PythonFromImport {
+        module: String,
+        names: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -12,7 +12,7 @@
   <code>cargo install charter</code>
 </p>
 
-charter generates a `.charter/` directory containing token-dense structural context for **Rust** codebases.
+charter generates a `.charter/` directory containing token-dense structural context for **Rust** and **Python** codebases.
 
 When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` provides the structured context it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
 
@@ -28,12 +28,12 @@ cargo install --path .       # from source
 ## Quick Start
 
 ```bash
-# In your Rust project root:
+# In your Rust or Python project root:
 charter              # Generate .charter/ directory
 charter read         # Output context to stdout
 ```
 
-That's it. Run `charter` once to capture, then `charter read` whenever you need to reload context.
+That's it. Run `charter` once to capture, then `charter read` whenever you need to reload context. Charter automatically detects whether your project is Rust, Python, or mixed.
 
 ## Commands
 
@@ -157,6 +157,45 @@ charter session status   # See what changed
 charter session end      # End session tracking
 ```
 
+### `charter serve [path]`
+
+Starts an [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server over stdio. The server scans the codebase on startup and holds the parsed index in memory, exposing 12 tools for structural queries. All tools return structured JSON.
+
+```bash
+charter serve           # serve current directory
+charter serve /path     # serve a specific project
+```
+
+**MCP Tools:**
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `search_symbols` | `query`, `kind?`, `limit?` | Fuzzy/partial search across all symbols |
+| `find_symbol` | `name`, `kind?` | Exact or fuzzy lookup of a specific symbol |
+| `find_implementations` | `symbol` | Trait implementors, type methods, derive-generated impls |
+| `find_callers` | `symbol` | All call sites with caller name, file, and line |
+| `find_dependencies` | `symbol`, `direction` | Upstream/downstream/both dependencies with file:line |
+| `get_module_tree` | `root?` | File paths with symbol counts |
+| `get_type_hierarchy` | `symbol` | Trait inheritance, derives, supertraits, base classes |
+| `summarize` | `scope?` | Architectural summary with counts and complexity hotspots |
+| `get_snippet` | `name` | Captured function bodies with importance scores |
+| `read_source` | `file`, `start_line`, `end_line?` | Read any source range from indexed files |
+| `search_text` | `pattern`, `glob?`, `case_insensitive?`, `context_lines?`, `max_results?` | Regex text search across indexed files with context |
+| `rescan` | — | Re-scan codebase and persist cache |
+
+**MCP client configuration** (e.g. for Claude Desktop or Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "charter": {
+      "command": "charter",
+      "args": ["serve", "/path/to/project"]
+    }
+  }
+}
+```
+
 ### `charter status`
 
 Quick summary without full context output:
@@ -177,9 +216,9 @@ The `.charter/` directory contains structured context optimized for LLM consumpt
 
 | File | Contents | Example |
 |------|----------|---------|
-| `overview.md` | Workspace structure, module tree, entry points, features | Crate hierarchy, bin/lib targets |
-| `symbols.md` | Complete symbol index with full signatures | Every struct, enum, fn, trait with fields/variants |
-| `types.md` | Trait definitions, impl map, derive map | `Default -> [Cache, Config, State]` |
+| `overview.md` | Workspace structure, module tree, entry points, features | Crate hierarchy, Python packages, bin/lib targets |
+| `symbols.md` | Complete symbol index with full signatures | Structs, enums, functions, traits, classes |
+| `types.md` | Trait definitions, impl map, derive map; Python Protocols, ABCs, class hierarchy | `Default -> [Cache, Config, State]` |
 | `refs.md` | Cross-reference index | `PipelineResult` used in 12 files |
 | `dependents.md` | Inverse dependency map | What breaks if you change a file |
 
@@ -191,8 +230,8 @@ The `.charter/` directory contains structured context optimized for LLM consumpt
 | `clusters.md` | Semantic function groupings | 87 parse functions work together |
 | `dataflow.md` | Type flow tracking | `Cache` produced by X, consumed by Y |
 | `hotspots.md` | High-complexity functions | Ranked by cyclomatic complexity + churn |
-| `errors.md` | Error propagation patterns | Where errors originate, how they flow |
-| `safety.md` | Unsafe blocks, panic points, async patterns | Safety-critical code locations |
+| `errors.md` | Error propagation patterns | Where errors originate (Result/Option, raise/assert), how they flow |
+| `safety.md` | Unsafe blocks, panic points, async patterns; Python dangerous calls (eval, exec, subprocess, pickle) | Safety-critical code locations |
 | `snippets.md` | Captured function bodies | Important function implementations |
 | `manifest.md` | File manifest with roles and churn | `[source]` `[test]` `[churn:high]` |
 
@@ -320,6 +359,25 @@ High-churn files:
 
 ## LLM Integration
 
+### MCP Server (recommended for AI agents)
+
+Add charter as an MCP server in your client configuration. This gives your LLM direct access to structural queries without needing to parse text output:
+
+```json
+{
+  "mcpServers": {
+    "charter": {
+      "command": "charter",
+      "args": ["serve", "."]
+    }
+  }
+}
+```
+
+The MCP server holds the full parsed index in memory and responds to queries in sub-millisecond time. Use `rescan` to pick up changes without restarting.
+
+### CLI (for context recovery)
+
 Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
 
 ```markdown
@@ -328,10 +386,10 @@ Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
 This project uses charter for structural context recovery. After context compaction or in a new session, if you've lost track of codebase structure:
 
 1. Run `charter read` to reload orientation, types, and complexity hotspots
-2. Use `charter lookup <Symbol>` for specific type/function details
+2. Use `charter lookup <Symbol>` for specific type/function/class details
 3. Use `charter query "callers of X"` to trace relationships
 
-The `.charter/` directory contains pre-computed analysis that's expensive to reconstruct from source: trait hierarchies, call graphs, semantic clusters, and complexity rankings.
+The `.charter/` directory contains pre-computed analysis that's expensive to reconstruct from source: trait hierarchies (Protocols/ABCs for Python), call graphs, semantic clusters, and complexity rankings.
 ```
 
 ## Performance
@@ -346,9 +404,9 @@ The `.charter/` directory contains pre-computed analysis that's expensive to rec
 ## How It Works
 
 **Phase 1 — Parallel Capture:**
-- `ignore::WalkParallel` collects all `.rs` files
+- `ignore::WalkParallel` collects all `.rs` and `.py` files
 - Cache check: match `(path, size, mtime)` or blake3 hash
-- `tree-sitter` parses each file with thread-local parser pool
+- `tree-sitter` parses each file with thread-local parser pool (Rust or Python grammar)
 - Extract: symbols, imports, complexity, call graph, error propagation
 - `JoinSet` collects results in parallel
 

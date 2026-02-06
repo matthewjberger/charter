@@ -6,6 +6,7 @@ use super::calls::FunctionId;
 pub enum ErrorReturnType {
     Result { ok_type: String, err_type: String },
     Option { some_type: String },
+    Raises { exception_types: Vec<String> },
     Neither,
 }
 
@@ -23,6 +24,13 @@ impl std::fmt::Display for ErrorReturnType {
             }
             ErrorReturnType::Option { some_type } => {
                 write!(f, "Option<{}>", some_type)
+            }
+            ErrorReturnType::Raises { exception_types } => {
+                if exception_types.is_empty() {
+                    write!(f, "raises")
+                } else {
+                    write!(f, "raises {}", exception_types.join(", "))
+                }
             }
             ErrorReturnType::Neither => write!(f, "()"),
         }
@@ -42,6 +50,8 @@ pub enum ErrorOriginKind {
     BailMacro,
     NoneReturn,
     CustomError,
+    RaiseStatement,
+    AssertStatement,
 }
 
 impl std::fmt::Display for ErrorOriginKind {
@@ -52,6 +62,8 @@ impl std::fmt::Display for ErrorOriginKind {
             ErrorOriginKind::BailMacro => write!(f, "bail!()"),
             ErrorOriginKind::NoneReturn => write!(f, "None"),
             ErrorOriginKind::CustomError => write!(f, "error"),
+            ErrorOriginKind::RaiseStatement => write!(f, "raise"),
+            ErrorOriginKind::AssertStatement => write!(f, "assert"),
         }
     }
 }

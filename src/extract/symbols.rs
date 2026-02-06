@@ -92,6 +92,30 @@ pub enum SymbolKind {
         aliased_type: String,
     },
     Mod,
+    Class {
+        bases: Vec<String>,
+        fields: Vec<ClassField>,
+        methods: Vec<ClassMethod>,
+        decorators: Vec<DecoratorInfo>,
+        is_dataclass: bool,
+        is_protocol: bool,
+        is_abc: bool,
+    },
+    PythonFunction {
+        parameters: Vec<Parameter>,
+        return_type: Option<String>,
+        decorators: Vec<DecoratorInfo>,
+        is_generator: bool,
+        is_classmethod: bool,
+        is_staticmethod: bool,
+        is_property: bool,
+        docstring: Option<String>,
+    },
+    Variable {
+        type_hint: Option<String>,
+        value: Option<String>,
+    },
+    PythonModule,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,4 +181,63 @@ impl Visibility {
             Visibility::Private => "",
         }
     }
+
+    pub fn python_prefix(&self) -> &str {
+        ""
+    }
+
+    pub fn from_python_name(name: &str) -> Self {
+        if name.starts_with("__") && !name.ends_with("__") {
+            Visibility::Private
+        } else if name.starts_with('_') {
+            Visibility::PubCrate
+        } else {
+            Visibility::Public
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassField {
+    pub name: String,
+    pub type_hint: Option<String>,
+    pub default_value: Option<String>,
+    pub is_class_var: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassMethod {
+    pub name: String,
+    pub visibility: Visibility,
+    pub signature: String,
+    pub is_async: bool,
+    pub is_classmethod: bool,
+    pub is_staticmethod: bool,
+    pub is_property: bool,
+    pub is_abstract: bool,
+    pub line: usize,
+    pub docstring: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Parameter {
+    pub name: String,
+    pub type_hint: Option<String>,
+    pub default_value: Option<String>,
+    pub kind: ParameterKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ParameterKind {
+    Regular,
+    Args,
+    Kwargs,
+    PositionalOnly,
+    KeywordOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecoratorInfo {
+    pub name: String,
+    pub arguments: Option<String>,
 }

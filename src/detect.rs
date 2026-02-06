@@ -2,6 +2,25 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectKind {
+    Rust,
+    Python,
+    Mixed,
+    Unknown,
+}
+
+impl std::fmt::Display for ProjectKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProjectKind::Rust => write!(f, "Rust"),
+            ProjectKind::Python => write!(f, "Python"),
+            ProjectKind::Mixed => write!(f, "Mixed"),
+            ProjectKind::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 pub async fn find_project_root(path: Option<PathBuf>) -> Result<PathBuf> {
     let start = match path {
         Some(p) => {
@@ -18,12 +37,24 @@ pub async fn find_project_root(path: Option<PathBuf>) -> Result<PathBuf> {
         .await
         .with_context(|| format!("Failed to canonicalize path: {}", start.display()))?;
 
+    if has_cargo_toml(&start).await {
+        return Ok(start);
+    }
+
+    if has_python_project(&start).await {
+        return Ok(start);
+    }
+
     if let Some(cargo_root) = find_cargo_root(&start).await {
         return Ok(cargo_root);
     }
 
+    if let Some(python_root) = find_python_root(&start).await {
+        return Ok(python_root);
+    }
+
     if let Some(git_root) = find_git_root(&start).await {
-        if has_cargo_toml(&git_root).await {
+        if has_cargo_toml(&git_root).await || has_python_project(&git_root).await {
             return Ok(git_root);
         }
     }
@@ -72,11 +103,77 @@ async fn has_cargo_toml(path: &Path) -> bool {
     fs::metadata(path.join("Cargo.toml")).await.is_ok()
 }
 
+async fn find_python_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+
+    loop {
+        if has_python_project(&current).await {
+            return Some(current);
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+
+    None
+}
+
+async fn has_python_project(path: &Path) -> bool {
+    if fs::metadata(path.join("pyproject.toml")).await.is_ok()
+        || fs::metadata(path.join("setup.py")).await.is_ok()
+        || fs::metadata(path.join("setup.cfg")).await.is_ok()
+    {
+        return true;
+    }
+
+    for dir_name in ["Lib", "lib", "src"] {
+        let dir = path.join(dir_name);
+        if fs::metadata(&dir).await.is_ok() {
+            if let Ok(mut entries) = fs::read_dir(&dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.ends_with(".py") || name_str == "__init__.py" {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceInfo {
     pub root: PathBuf,
     pub members: Vec<CrateInfo>,
+    pub python_packages: Vec<PythonPackageInfo>,
     pub is_workspace: bool,
+    pub project_kind: ProjectKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct PythonPackageInfo {
+    pub name: String,
+    pub path: PathBuf,
+    pub version: Option<String>,
+    pub dependencies: Vec<String>,
+    pub entry_points: Vec<PythonEntryPoint>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PythonEntryPoint {
+    pub name: String,
+    pub kind: PythonEntryKind,
+    pub module: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonEntryKind {
+    ConsoleScript,
+    GuiScript,
+    Main,
 }
 
 #[derive(Debug, Clone)]
@@ -127,31 +224,246 @@ impl std::fmt::Display for CrateType {
 }
 
 pub async fn detect_workspace(root: &Path) -> Result<WorkspaceInfo> {
-    let cargo_toml_path = root.join("Cargo.toml");
-    let content = fs::read_to_string(&cargo_toml_path)
-        .await
-        .with_context(|| format!("Failed to read {}", cargo_toml_path.display()))?;
+    let has_cargo = has_cargo_toml(root).await;
+    let has_python = has_python_project(root).await;
 
-    let cargo_toml: toml::Value = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
+    let project_kind = match (has_cargo, has_python) {
+        (true, true) => ProjectKind::Mixed,
+        (true, false) => ProjectKind::Rust,
+        (false, true) => ProjectKind::Python,
+        (false, false) => ProjectKind::Unknown,
+    };
 
-    let is_workspace = cargo_toml.get("workspace").is_some();
+    let (members, is_workspace) = if has_cargo {
+        let cargo_toml_path = root.join("Cargo.toml");
+        let content = fs::read_to_string(&cargo_toml_path)
+            .await
+            .with_context(|| format!("Failed to read {}", cargo_toml_path.display()))?;
 
-    if is_workspace {
-        let members = parse_workspace_members(root, &cargo_toml).await?;
-        Ok(WorkspaceInfo {
-            root: root.to_path_buf(),
-            members,
-            is_workspace: true,
-        })
+        let cargo_toml: toml::Value = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
+
+        let is_workspace = cargo_toml.get("workspace").is_some();
+
+        if is_workspace {
+            (parse_workspace_members(root, &cargo_toml).await?, true)
+        } else {
+            (vec![parse_single_crate(root, &cargo_toml).await?], false)
+        }
     } else {
-        let crate_info = parse_single_crate(root, &cargo_toml).await?;
-        Ok(WorkspaceInfo {
-            root: root.to_path_buf(),
-            members: vec![crate_info],
-            is_workspace: false,
-        })
+        (Vec::new(), false)
+    };
+
+    let python_packages = if has_python {
+        detect_python_packages(root).await?
+    } else {
+        Vec::new()
+    };
+
+    Ok(WorkspaceInfo {
+        root: root.to_path_buf(),
+        members,
+        python_packages,
+        is_workspace,
+        project_kind,
+    })
+}
+
+pub async fn detect_python_packages(root: &Path) -> Result<Vec<PythonPackageInfo>> {
+    let mut packages = Vec::new();
+
+    if let Ok(content) = fs::read_to_string(root.join("pyproject.toml")).await {
+        if let Ok(toml) = toml::from_str::<toml::Value>(&content) {
+            let name = toml
+                .get("project")
+                .or_else(|| toml.get("tool").and_then(|t| t.get("poetry")))
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let version = toml
+                .get("project")
+                .or_else(|| toml.get("tool").and_then(|t| t.get("poetry")))
+                .and_then(|p| p.get("version"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let dependencies = extract_python_dependencies(&toml);
+            let entry_points = extract_python_entry_points(root, &toml).await;
+
+            packages.push(PythonPackageInfo {
+                name,
+                path: root.to_path_buf(),
+                version,
+                dependencies,
+                entry_points,
+            });
+        }
+    } else if let Ok(content) = fs::read_to_string(root.join("setup.py")).await {
+        let name = extract_setup_py_name(&content).unwrap_or_else(|| "unknown".to_string());
+
+        packages.push(PythonPackageInfo {
+            name,
+            path: root.to_path_buf(),
+            version: None,
+            dependencies: Vec::new(),
+            entry_points: Vec::new(),
+        });
     }
+
+    if packages.is_empty() {
+        let has_python_files = fs::metadata(root.join("__init__.py")).await.is_ok()
+            || has_python_in_dirs(root, &["Lib", "lib", "src"]).await;
+
+        if has_python_files {
+            let name = root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            packages.push(PythonPackageInfo {
+                name,
+                path: root.to_path_buf(),
+                version: None,
+                dependencies: Vec::new(),
+                entry_points: Vec::new(),
+            });
+        }
+    }
+
+    Ok(packages)
+}
+
+async fn has_python_in_dirs(root: &Path, dirs: &[&str]) -> bool {
+    for dir_name in dirs {
+        let dir = root.join(dir_name);
+        if fs::metadata(&dir).await.is_ok() {
+            if let Ok(mut entries) = fs::read_dir(&dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.ends_with(".py") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn extract_python_dependencies(toml: &toml::Value) -> Vec<String> {
+    let mut deps = Vec::new();
+
+    if let Some(project) = toml.get("project") {
+        if let Some(dependencies) = project.get("dependencies") {
+            if let Some(arr) = dependencies.as_array() {
+                for dep in arr {
+                    if let Some(dep_str) = dep.as_str() {
+                        let name = dep_str
+                            .split(['>', '<', '=', '[', ';', ' '])
+                            .next()
+                            .unwrap_or(dep_str);
+                        deps.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(tool) = toml.get("tool") {
+        if let Some(poetry) = tool.get("poetry") {
+            if let Some(dependencies) = poetry.get("dependencies") {
+                if let Some(table) = dependencies.as_table() {
+                    for key in table.keys() {
+                        if key != "python" {
+                            deps.push(key.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    deps
+}
+
+async fn extract_python_entry_points(root: &Path, toml: &toml::Value) -> Vec<PythonEntryPoint> {
+    let mut entry_points = Vec::new();
+
+    if let Some(project) = toml.get("project") {
+        if let Some(scripts) = project.get("scripts") {
+            if let Some(table) = scripts.as_table() {
+                for (name, value) in table {
+                    if let Some(module) = value.as_str() {
+                        entry_points.push(PythonEntryPoint {
+                            name: name.clone(),
+                            kind: PythonEntryKind::ConsoleScript,
+                            module: module.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(gui_scripts) = project.get("gui-scripts") {
+            if let Some(table) = gui_scripts.as_table() {
+                for (name, value) in table {
+                    if let Some(module) = value.as_str() {
+                        entry_points.push(PythonEntryPoint {
+                            name: name.clone(),
+                            kind: PythonEntryKind::GuiScript,
+                            module: module.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if fs::metadata(root.join("__main__.py")).await.is_ok() {
+        let name = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("main")
+            .to_string();
+        entry_points.push(PythonEntryPoint {
+            name,
+            kind: PythonEntryKind::Main,
+            module: "__main__".to_string(),
+        });
+    }
+
+    entry_points
+}
+
+fn extract_setup_py_name(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("name=") || line.starts_with("name =") {
+            let value = line.split('=').nth(1)?.trim();
+            let value = value.trim_matches(|c| c == '"' || c == '\'' || c == ',');
+            return Some(value.to_string());
+        }
+    }
+
+    if let Some(setup_call_start) = content.find("setup(") {
+        let after_setup = &content[setup_call_start..];
+        for pattern in ["name=\"", "name='", "name =\"", "name ='"] {
+            if let Some(name_start) = after_setup.find(pattern) {
+                let quote_char = if pattern.contains('"') { '"' } else { '\'' };
+                let value_start = name_start + pattern.len();
+                if let Some(value_end) = after_setup[value_start..].find(quote_char) {
+                    let name = &after_setup[value_start..value_start + value_end];
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 async fn parse_workspace_members(root: &Path, cargo_toml: &toml::Value) -> Result<Vec<CrateInfo>> {

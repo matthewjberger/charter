@@ -2,16 +2,16 @@
 
 ## Overview
 
-charter is a fast async CLI tool that generates token-dense structural context for Rust codebases. It produces a `.charter/` directory containing parsed symbol information, type relationships, and cross-references optimized for LLM consumption.
+charter is a fast async CLI tool that generates token-dense structural context for Rust and Python codebases. It produces a `.charter/` directory containing parsed symbol information, type relationships, and cross-references optimized for LLM consumption. Charter automatically detects project type (Rust, Python, or mixed) and generates appropriate output for each language.
 
 ## Architecture
 
 ### Two-Phase Pipeline
 
 **Phase 1 (Capture):** Parallel fan-out/join
-- Walk: `ignore::WalkParallel` collects all `.rs` files
+- Walk: `ignore::WalkParallel` collects all `.rs` and `.py` files
 - Cache check: Match `(path, size, mtime)` or blake3 hash
-- Parse: tree-sitter with thread-local parser pool
+- Parse: tree-sitter with thread-local parser pool (Rust or Python grammar)
 - Extract: symbols, imports, complexity, call graph, error propagation
 - Join: `JoinSet` collects results
 - Emit: Streaming `BufWriter` per output file
@@ -39,15 +39,20 @@ src/
   pipeline/
     walk.rs            - parallel directory walking
     read.rs            - mmap + async file reading
-    parse.rs           - tree-sitter Rust extraction
+    parse.rs           - parser dispatch and shared utilities
+    parse/
+      rust.rs          - tree-sitter Rust extraction
+      python.rs        - tree-sitter Python extraction
   extract.rs           - extraction types
   extract/
+    language.rs        - Language enum (Rust, Python)
     symbols.rs         - Symbol, SymbolKind, etc.
     imports.rs         - use statement types
     attributes.rs      - derive/cfg types
     complexity.rs      - cyclomatic complexity metrics
     calls.rs           - call graph types
     errors.rs          - error propagation types
+    safety.rs          - SafetyInfo, PythonSafetyInfo
   output.rs            - output orchestration
   output/
     overview.rs        - workspace/module tree
@@ -91,7 +96,7 @@ Query types: `callers of X`, `callees of X`, `implementors of X`, `users of X`, 
 
 - `tokio` - async runtime
 - `ignore` - parallel directory walking
-- `tree-sitter` + `tree-sitter-rust` - AST parsing
+- `tree-sitter` + `tree-sitter-rust` + `tree-sitter-python` - AST parsing
 - `blake3` - fast hashing
 - `bincode` - cache serialization
 - `clap` - CLI parsing
@@ -101,9 +106,9 @@ Query types: `callers of X`, `callees of X`, `implementors of X`, `users of X`, 
 ## Output Files
 
 ### Core
-- `overview.md` - workspace structure, module tree, entry points
-- `symbols.md` - complete symbol index with signatures
-- `types.md` - trait definitions, impl map, derive map
+- `overview.md` - workspace structure, module tree, entry points (Rust crates + Python packages)
+- `symbols.md` - complete symbol index with signatures (classes, functions, variables)
+- `types.md` - trait definitions, impl map, derive map; Python Protocols, ABCs, class hierarchy
 - `refs.md` - cross-reference index (PascalCase types)
 - `dependents.md` - inverse dependency map
 - `manifest.md` - file manifest with roles and churn
@@ -113,8 +118,8 @@ Query types: `callers of X`, `callees of X`, `implementors of X`, `users of X`, 
 - `clusters.md` - semantic function groupings by affinity
 - `dataflow.md` - type producers/consumers, field access patterns
 - `hotspots.md` - high-complexity functions by importance score
-- `errors.md` - error propagation patterns and origins
-- `safety.md` - unsafe blocks, panic points, async patterns
+- `errors.md` - error propagation patterns and origins (Rust Result/Option, Python raise/assert)
+- `safety.md` - unsafe blocks, panic points, async patterns; Python dangerous calls (eval, exec, subprocess, pickle, ctypes)
 - `snippets.md` - captured function bodies for important code
 
 ## Performance Targets

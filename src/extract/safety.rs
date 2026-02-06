@@ -65,6 +65,8 @@ pub enum PanicKind {
     UnimplementedMacro,
     Assert,
     IndexAccess,
+    RaiseException(String),
+    AssertFalse,
 }
 
 impl std::fmt::Display for PanicKind {
@@ -78,6 +80,8 @@ impl std::fmt::Display for PanicKind {
             PanicKind::UnimplementedMacro => write!(f, "unimplemented!()"),
             PanicKind::Assert => write!(f, "assert!()"),
             PanicKind::IndexAccess => write!(f, "index access"),
+            PanicKind::RaiseException(exc) => write!(f, "raise {}", exc),
+            PanicKind::AssertFalse => write!(f, "assert False"),
         }
     }
 }
@@ -256,4 +260,35 @@ pub struct TestedItem {
     pub item_name: String,
     pub test_names: Vec<String>,
     pub coverage_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PythonSafetyInfo {
+    pub dangerous_calls: Vec<PythonDangerousCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonDangerousCall {
+    pub line: usize,
+    pub call_name: String,
+    pub category: String,
+    pub containing_function: Option<String>,
+    pub risk_level: RiskLevel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RiskLevel {
+    High,
+    Medium,
+    Low,
+}
+
+impl std::fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RiskLevel::High => write!(f, "high"),
+            RiskLevel::Medium => write!(f, "medium"),
+            RiskLevel::Low => write!(f, "low"),
+        }
+    }
 }

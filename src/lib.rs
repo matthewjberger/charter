@@ -7,5 +7,6 @@ pub mod git;
 pub mod output;
 pub mod pipeline;
 pub mod query;
+pub mod serve;
 pub mod session;
 pub mod tests;

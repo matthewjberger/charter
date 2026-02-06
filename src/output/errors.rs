@@ -206,6 +206,15 @@ fn format_return_type(return_type: &ErrorReturnType) -> String {
             let some_short = shorten_type(some_type);
             format!("Option<{}>", some_short)
         }
+        ErrorReturnType::Raises { exception_types } => {
+            if exception_types.is_empty() {
+                "raises".to_string()
+            } else if exception_types.len() == 1 {
+                format!("raises {}", exception_types[0])
+            } else {
+                format!("raises {}", exception_types.join(" | "))
+            }
+        }
         ErrorReturnType::Neither => "()".to_string(),
     }
 }

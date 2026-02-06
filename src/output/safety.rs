@@ -3,6 +3,7 @@ use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
+use crate::detect::ProjectKind;
 use crate::pipeline::PipelineResult;
 
 pub async fn write_safety(charter_dir: &Path, result: &PipelineResult, stamp: &str) -> Result<()> {
@@ -20,6 +21,7 @@ pub async fn write_safety(charter_dir: &Path, result: &PipelineResult, stamp: &s
     write_panic_points(&mut buffer, result)?;
     write_unsafe_blocks(&mut buffer, result)?;
     write_unsafe_traits(&mut buffer, result)?;
+    write_python_safety(&mut buffer, result)?;
     write_lifetime_summary(&mut buffer, result)?;
     write_async_summary(&mut buffer, result)?;
     write_feature_flags(&mut buffer, result)?;
@@ -64,7 +66,7 @@ fn write_panic_points(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<(
 
     writeln!(buffer, "## Panic Points")?;
     writeln!(buffer)?;
-    writeln!(buffer, "Locations that may panic at runtime.")?;
+    writeln!(buffer, "Locations that may panic/raise at runtime.")?;
     writeln!(buffer)?;
 
     let unwrap_count = explicit_panics
@@ -91,13 +93,39 @@ fn write_panic_points(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<(
         .iter()
         .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::Assert))
         .count();
+    let raise_count = explicit_panics
+        .iter()
+        .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::RaiseException(_)))
+        .count();
+    let assert_false_count = explicit_panics
+        .iter()
+        .filter(|(_, p)| matches!(p.kind, crate::extract::safety::PanicKind::AssertFalse))
+        .count();
 
-    writeln!(buffer, "### Explicit Panics ({})", explicit_panics.len())?;
+    writeln!(
+        buffer,
+        "### Explicit Panics/Raises ({})",
+        explicit_panics.len()
+    )?;
     writeln!(buffer)?;
-    writeln!(buffer, "  .unwrap(): {}", unwrap_count)?;
-    writeln!(buffer, "  .expect(): {}", expect_count)?;
-    writeln!(buffer, "  panic!/unreachable!/todo!: {}", macro_count)?;
-    writeln!(buffer, "  assert!: {}", assert_count)?;
+    if unwrap_count > 0 {
+        writeln!(buffer, "  .unwrap(): {}", unwrap_count)?;
+    }
+    if expect_count > 0 {
+        writeln!(buffer, "  .expect(): {}", expect_count)?;
+    }
+    if macro_count > 0 {
+        writeln!(buffer, "  panic!/unreachable!/todo!: {}", macro_count)?;
+    }
+    if assert_count > 0 {
+        writeln!(buffer, "  assert!: {}", assert_count)?;
+    }
+    if raise_count > 0 {
+        writeln!(buffer, "  raise: {}", raise_count)?;
+    }
+    if assert_false_count > 0 {
+        writeln!(buffer, "  assert (Python): {}", assert_false_count)?;
+    }
     writeln!(buffer)?;
 
     if !explicit_panics.is_empty() {
@@ -242,6 +270,114 @@ fn write_unsafe_traits(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<
         }
         writeln!(buffer)?;
     }
+
+    Ok(())
+}
+
+fn write_python_safety(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
+    let mut all_dangerous_calls: Vec<_> = result
+        .files
+        .iter()
+        .flat_map(|f| {
+            f.parsed
+                .python_safety
+                .dangerous_calls
+                .iter()
+                .map(move |c| (f.relative_path.as_str(), c))
+        })
+        .collect();
+
+    if all_dangerous_calls.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(buffer, "## Python Safety")?;
+    writeln!(buffer)?;
+    writeln!(buffer, "Potentially dangerous operations in Python code.")?;
+    writeln!(buffer)?;
+
+    let ctypes_count = all_dangerous_calls
+        .iter()
+        .filter(|(_, c)| c.category == "ctypes" || c.category == "cffi")
+        .count();
+    let subprocess_count = all_dangerous_calls
+        .iter()
+        .filter(|(_, c)| c.category == "subprocess")
+        .count();
+    let eval_count = all_dangerous_calls
+        .iter()
+        .filter(|(_, c)| c.category == "eval" || c.category == "exec")
+        .count();
+    let pickle_count = all_dangerous_calls
+        .iter()
+        .filter(|(_, c)| c.category == "pickle")
+        .count();
+
+    if ctypes_count > 0 {
+        writeln!(buffer, "### FFI (ctypes/cffi): {}", ctypes_count)?;
+        writeln!(buffer)?;
+        writeln!(buffer, "Direct memory manipulation via C interop.")?;
+        writeln!(buffer)?;
+    }
+
+    if subprocess_count > 0 {
+        writeln!(buffer, "### Subprocess Calls: {}", subprocess_count)?;
+        writeln!(buffer)?;
+        writeln!(
+            buffer,
+            "Shell command execution - potential command injection risk."
+        )?;
+        writeln!(buffer)?;
+    }
+
+    if eval_count > 0 {
+        writeln!(buffer, "### eval/exec: {}", eval_count)?;
+        writeln!(buffer)?;
+        writeln!(
+            buffer,
+            "Dynamic code execution - potential code injection risk."
+        )?;
+        writeln!(buffer)?;
+    }
+
+    if pickle_count > 0 {
+        writeln!(buffer, "### pickle: {}", pickle_count)?;
+        writeln!(buffer)?;
+        writeln!(
+            buffer,
+            "Object deserialization - potential arbitrary code execution."
+        )?;
+        writeln!(buffer)?;
+    }
+
+    all_dangerous_calls.sort_by_key(|(path, c)| (*path, c.line));
+
+    writeln!(buffer, "### All Dangerous Calls")?;
+    writeln!(buffer)?;
+
+    let mut current_file = "";
+    for (path, call) in all_dangerous_calls.iter().take(100) {
+        if *path != current_file {
+            writeln!(buffer, "{}:", path)?;
+            current_file = path;
+        }
+        let fn_context = call.containing_function.as_deref().unwrap_or("(top-level)");
+        let risk = match call.risk_level {
+            crate::extract::safety::RiskLevel::High => "HIGH",
+            crate::extract::safety::RiskLevel::Medium => "MEDIUM",
+            crate::extract::safety::RiskLevel::Low => "LOW",
+        };
+        writeln!(
+            buffer,
+            "  L{} in {} — {} [{}] {}",
+            call.line, fn_context, call.call_name, call.category, risk
+        )?;
+    }
+
+    if all_dangerous_calls.len() > 100 {
+        writeln!(buffer, "[+{} more]", all_dangerous_calls.len() - 100)?;
+    }
+    writeln!(buffer)?;
 
     Ok(())
 }
@@ -590,6 +726,7 @@ fn write_generic_constraints(buffer: &mut Vec<u8>, result: &PipelineResult) -> R
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn write_test_coverage(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<()> {
     let test_functions: Vec<_> = result
         .files
@@ -646,7 +783,9 @@ fn write_test_coverage(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<
     writeln!(buffer, "  Total test functions: {}", total_tests)?;
     writeln!(buffer, "  Async tests: {}", async_tests)?;
     writeln!(buffer, "  Ignored tests: {}", ignored_tests)?;
-    writeln!(buffer, "  #[should_panic] tests: {}", should_panic_tests)?;
+    if result.workspace.project_kind != ProjectKind::Python {
+        writeln!(buffer, "  #[should_panic] tests: {}", should_panic_tests)?;
+    }
     writeln!(buffer, "  Test modules: {}", test_modules.len())?;
     writeln!(buffer)?;
 
@@ -716,9 +855,11 @@ fn write_doc_coverage(buffer: &mut Vec<u8>, result: &PipelineResult) -> Result<(
     writeln!(buffer, "  Public items: {}", total_public_items)?;
     writeln!(buffer, "  Documented items: {}", documented_count)?;
     writeln!(buffer, "  With examples: {}", with_examples)?;
-    writeln!(buffer, "  With # Panics section: {}", with_panics)?;
-    writeln!(buffer, "  With # Safety section: {}", with_safety)?;
-    writeln!(buffer, "  With # Errors section: {}", with_errors)?;
+    if result.workspace.project_kind != ProjectKind::Python {
+        writeln!(buffer, "  With # Panics section: {}", with_panics)?;
+        writeln!(buffer, "  With # Safety section: {}", with_safety)?;
+        writeln!(buffer, "  With # Errors section: {}", with_errors)?;
+    }
     writeln!(buffer)?;
 
     Ok(())
