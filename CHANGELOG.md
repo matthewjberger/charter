@@ -1,4 +1,4 @@
-## [0.1.1] - 2026-02-04
+## [0.1.2] - 2026-02-07
 
 ### 🚀 Features
 
@@ -6,6 +6,7 @@
 - Add comprehensive safety and Rust-specific analysis
 - Add reverse call graph, semantic clustering, and data flow tracking
 - Split into library and CLI binary for crates.io publishing
+- Add python support and mcp server
 
 ### 🐛 Bug Fixes
 
@@ -37,3 +38,5 @@
 - Prepare for crates.io release
 - Add GitHub Actions workflow
 - Bump version to v0.1.1
+- Update changelog for v0.1.1
+- Bump version to v0.1.2
