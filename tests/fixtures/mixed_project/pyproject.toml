@@ -1,0 +1,8 @@
+[project]
+name = "mixed_bindings"
+version = "0.1.0"
+description = "Python bindings for mixed_project"
+
+[build-system]
+requires = ["maturin>=1.0"]
+build-backend = "maturin"
