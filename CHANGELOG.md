@@ -1,4 +1,4 @@
-## [0.1.2] - 2026-02-07
+## [0.1.3] - 2026-02-07
 
 ### 🚀 Features
 
@@ -40,3 +40,5 @@
 - Bump version to v0.1.1
 - Update changelog for v0.1.1
 - Bump version to v0.1.2
+- Update changelog for v0.1.2
+- Bump version to v0.1.3
