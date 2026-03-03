@@ -535,6 +535,8 @@ impl CharterServer {
                 }
             }
         }
+        methods.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.file.cmp(&b.file)));
+        methods.dedup_by(|a, b| a.name == b.name && a.file == b.file && a.line == b.line);
 
         let result = ImplementationsResult {
             trait_implementors,
@@ -560,13 +562,20 @@ impl CharterServer {
             callers.extend(caller_list.clone());
         }
 
+        let suffix = format!("::{}", params.0.symbol);
         for (qualified_name, caller_list) in &index.reverse_calls {
-            if qualified_name.ends_with(&format!("::{}", params.0.symbol))
-                && qualified_name != &params.0.symbol
-            {
+            if qualified_name.ends_with(&suffix) && qualified_name.as_str() != params.0.symbol {
                 callers.extend(caller_list.clone());
             }
         }
+
+        callers.sort_by(|a, b| {
+            a.file
+                .cmp(&b.file)
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.line.cmp(&b.line))
+        });
+        callers.dedup_by(|a, b| a.file == b.file && a.name == b.name && a.line == b.line);
 
         let result = CallersResult { callers };
 
@@ -1082,11 +1091,59 @@ fn build_cache(files: &[FileResult]) -> Cache {
 }
 
 fn matches_glob(path: &str, glob: &str) -> bool {
-    if let Some(suffix) = glob.strip_prefix('*') {
-        path.ends_with(suffix)
-    } else {
-        path.contains(glob)
+    glob_match(path.as_bytes(), glob.as_bytes())
+}
+
+fn glob_match(path: &[u8], pattern: &[u8]) -> bool {
+    let mut px = 0;
+    let mut gx = 0;
+    let mut star_px = usize::MAX;
+    let mut star_gx = 0;
+
+    while px < path.len() {
+        if gx < pattern.len() && pattern[gx] == b'*' {
+            if gx + 1 < pattern.len() && pattern[gx + 1] == b'*' {
+                gx += 2;
+                if gx < pattern.len() && pattern[gx] == b'/' {
+                    gx += 1;
+                }
+                star_px = px;
+                star_gx = gx;
+            } else {
+                gx += 1;
+                star_px = px;
+                star_gx = gx;
+            }
+        } else if gx < pattern.len() && pattern[gx] == b'?' {
+            if path[px] == b'/' {
+                if star_px != usize::MAX {
+                    star_px += 1;
+                    px = star_px;
+                    gx = star_gx;
+                } else {
+                    return false;
+                }
+            } else {
+                px += 1;
+                gx += 1;
+            }
+        } else if gx < pattern.len() && path[px] == pattern[gx] {
+            px += 1;
+            gx += 1;
+        } else if star_px != usize::MAX {
+            star_px += 1;
+            px = star_px;
+            gx = star_gx;
+        } else {
+            return false;
+        }
     }
+
+    while gx < pattern.len() && pattern[gx] == b'*' {
+        gx += 1;
+    }
+
+    gx == pattern.len()
 }
 
 fn fuzzy_match(query: &str, target: &str) -> bool {

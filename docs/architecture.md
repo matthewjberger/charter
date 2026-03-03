@@ -1,51 +1,47 @@
 # Architecture
 
-This document describes the internal architecture of charter, a CLI tool that generates token-dense structural context for Rust codebases, optimized for LLM consumption.
+This document describes the internal architecture of charter, an MCP server that provides structural codebase intelligence for Rust and Python projects, optimized for LLM consumption.
 
 ## Overview
 
-Charter analyzes Rust projects using tree-sitter parsing and produces a `.charter/` directory containing markdown files with symbols, type relationships, call graphs, and cross-references. The tool is designed for speed (parallel processing, incremental caching) and output quality (high signal-to-noise ratio for LLMs).
+Charter analyzes Rust and Python projects using tree-sitter parsing. On startup, it runs a two-phase pipeline (capture + reference resolution), builds an in-memory `Index` of symbols, call graphs, type hierarchies, and cross-references, then exposes it all through MCP tools. The tool is designed for speed (parallel processing, incremental caching) and output quality (high signal-to-noise ratio for LLMs).
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Charter Pipeline                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
-│  │   Phase 1    │    │   Phase 2    │    │    Output    │       │
-│  │   Capture    │───▶│  References  │───▶│   Writers    │       │
-│  └──────────────┘    └──────────────┘    └──────────────┘       │
-│         │                   │                   │                │
-│         ▼                   ▼                   ▼                │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
-│  │ Walk files   │    │ Build symbol │    │ overview.md  │       │
-│  │ Parse AST    │    │ table        │    │ symbols.md   │       │
-│  │ Extract info │    │ Match refs   │    │ calls.md     │       │
-│  │ Cache check  │    │              │    │ clusters.md  │       │
-│  └──────────────┘    └──────────────┘    │ dataflow.md  │       │
-│                                          │ hotspots.md  │       │
-│                                          │ ...          │       │
-│                                          └──────────────┘       │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                         Charter Pipeline                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
+│  │   Phase 1    │    │   Phase 2    │    │    Index     │   │
+│  │   Capture    │───▶│  References  │───▶│   + MCP     │   │
+│  └──────────────┘    └──────────────┘    └──────────────┘   │
+│         │                   │                   │            │
+│         ▼                   ▼                   ▼            │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
+│  │ Walk files   │    │ Build symbol │    │ In-memory    │   │
+│  │ Parse AST    │    │ table        │    │ HashMaps     │   │
+│  │ Extract info │    │ Match refs   │    │ MCP tools    │   │
+│  │ Cache check  │    │              │    │              │   │
+│  └──────────────┘    └──────────────┘    └──────────────┘   │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Module Structure
 
 ```
 src/
-├── main.rs           # CLI entry point, argument parsing
+├── main.rs           # Entry point (capture or serve)
 ├── cli.rs            # clap derive CLI definitions
 ├── detect.rs         # Project/workspace detection
-├── deps.rs           # Dependency analysis command
-├── query.rs          # Query engine for symbol lookup
-├── session.rs        # Session state tracking
-├── tests.rs          # Test coverage mapping
+├── index.rs          # Shared in-memory Index (used by serve)
+├── serve.rs          # MCP server exposing Index via structured JSON tools
 ├── git.rs            # Async git operations
 ├── pipeline.rs       # Two-phase orchestrator
 ├── pipeline/
 │   ├── walk.rs       # Parallel directory walking
 │   ├── read.rs       # Async file reading
-│   └── parse.rs      # Tree-sitter Rust extraction (~2500 lines)
+│   └── parse/        # Tree-sitter extraction (Rust + Python)
 ├── extract.rs        # Extraction type definitions
 ├── extract/
 │   ├── symbols.rs    # Symbol, SymbolKind, InherentImpl
@@ -55,7 +51,7 @@ src/
 │   ├── calls.rs      # Call graph types
 │   ├── errors.rs     # Error propagation types
 │   └── safety.rs     # Unsafe/lifetime/async info
-├── output.rs         # Output orchestration, lookup, peek
+├── output.rs         # Shared output helpers
 └── output/
     ├── overview.rs   # Workspace structure, module tree
     ├── symbols.rs    # Symbol index with signatures
@@ -83,7 +79,8 @@ src/
 | `extract/*` | Type definitions for extracted information |
 | `output/*` | Generate markdown files from PipelineResult |
 | `detect` | Find Cargo.toml, workspace members, crate types |
-| `query` | Parse and execute queries (callers, callees, etc.) |
+| `index` | Build in-memory Index from pipeline results |
+| `serve` | MCP server exposing Index via structured JSON tools |
 
 ## Two-Phase Pipeline
 
@@ -209,6 +206,24 @@ struct CallEdge {
 }
 ```
 
+### Index
+
+The in-memory index built from pipeline results, used by the MCP server:
+
+```rust
+struct Index {
+    symbols_by_name: HashMap<String, Vec<SymbolInfo>>,
+    call_graph: HashMap<String, Vec<CallTarget>>,
+    reverse_calls: HashMap<String, Vec<CallerInfo>>,
+    impl_map: HashMap<String, Vec<ImplInfo>>,
+    references: HashMap<String, Vec<(String, usize)>>,
+    snippets: HashMap<String, SnippetInfo>,
+    result: PipelineResult,
+}
+```
+
+Reverse calls are indexed under both qualified names (`world::set_local_transform`) and bare function names (`set_local_transform`) for flexible lookup.
+
 ## Output Files
 
 | File | Purpose | Key Content |
@@ -332,7 +347,7 @@ On add:
 | Cold capture, 5000 files | < 15s |
 | Warm (0 changes) | < 100ms |
 | Warm (10 changes) | < 500ms |
-| `charter read` | < 50ms |
+| MCP query | < 1ms |
 
 ### Parallelism
 
@@ -341,37 +356,24 @@ On add:
 - I/O: Async via tokio, buffered writes
 - Output: Sequential (fast enough, simpler)
 
-## Commands
+## MCP Tools
 
-```
-charter [path]              # Generate/update the charter
-charter read [tier]         # Dump context to stdout
-charter status              # Quick summary
-charter lookup <symbol>     # Look up a single symbol
-charter query "<query>"     # Search (callers, callees, etc.)
-charter deps [--crate name] # Analyze dependencies
-charter tests [--file path] # Map tests to source files
-```
+The MCP server exposes the following tools, all querying the in-memory Index:
 
-### Read Tiers
-
-| Tier | Content |
-|------|---------|
-| `quick` | Overview only |
-| `default` | Overview + symbols + types |
-| `full` | Everything |
-
-### Query Types
-
-```
-callers of X      # What functions call X?
-callees of X      # What does X call?
-implementors of X # What types implement trait X?
-users of X        # What uses type X?
-errors in X       # What errors can X return?
-hotspots          # High-complexity functions
-public api        # Public interface summary
-```
+| Tool | Description |
+|------|-------------|
+| `search_symbols` | Fuzzy/partial search across all symbols |
+| `find_symbol` | Exact or fuzzy lookup of a specific symbol |
+| `find_implementations` | Trait implementors, type methods, derive-generated impls |
+| `find_callers` | All call sites with caller name, file, and line |
+| `find_dependencies` | Upstream/downstream/both dependencies |
+| `get_module_tree` | File paths with symbol counts |
+| `get_type_hierarchy` | Trait inheritance, derives, supertraits |
+| `summarize` | Architectural summary with counts and hotspots |
+| `get_snippet` | Captured function bodies with importance scores |
+| `read_source` | Read any source range from indexed files |
+| `search_text` | Regex text search across indexed files |
+| `rescan` | Re-scan codebase and persist cache |
 
 ## Error Handling
 

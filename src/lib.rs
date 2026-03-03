@@ -1,13 +1,9 @@
 pub mod cache;
 pub mod cli;
-pub mod deps;
 pub mod detect;
 pub mod extract;
 pub mod git;
 pub mod index;
 pub mod output;
 pub mod pipeline;
-pub mod query;
 pub mod serve;
-pub mod session;
-pub mod tests;

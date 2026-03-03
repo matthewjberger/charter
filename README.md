@@ -6,17 +6,13 @@
   <a href="https://github.com/matthewjberger/charter/blob/main/LICENSE-MIT"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=for-the-badge&labelColor=555555" height="20"></a>
 </p>
 
-<p align="center"><strong>Token-dense structural context for LLMs, in seconds.</strong></p>
+<p align="center"><strong>Structural codebase intelligence for LLMs, via MCP.</strong></p>
 
 <p align="center">
   <code>cargo install charter</code>
 </p>
 
-charter generates a `.charter/` directory containing token-dense structural context for **Rust** and **Python** codebases.
-
-When you're working with an LLM that's lost track of your codebase (after context compaction, or in a new session), `charter read` provides the structured context it needs to re-orient: symbol locations, call graphs, type flows, semantic clusters, and more.
-
-Compresses your codebase into structured, token-efficient context — typically 60-70% smaller than raw source while preserving full structural coverage.
+charter is an [MCP](https://modelcontextprotocol.io/) server that provides structural codebase intelligence for **Rust** and **Python** projects. It parses your codebase with tree-sitter, builds an in-memory index of symbols, call graphs, type hierarchies, and cross-references, then exposes it all through structured JSON tools.
 
 ## Installation
 
@@ -27,146 +23,29 @@ cargo install --path .       # from source
 
 ## Quick Start
 
-```bash
-# In your Rust or Python project root:
-charter              # Generate .charter/ directory
-charter read         # Output context to stdout
-```
+Add charter as an MCP server in your client configuration (Claude Desktop, Claude Code, etc.):
 
-That's it. Run `charter` once to capture, then `charter read` whenever you need to reload context. Charter automatically detects whether your project is Rust, Python, or mixed.
-
-## Commands
-
-### `charter`
-
-Generates or updates the `.charter/` directory. Incremental — only re-parses files that changed.
-
-```
-$ charter
-
-Charter @ a3f8c2d → b7e1d4f | 3 modified, 1 added, 0 removed
-
-  modified: src/ecs/query.rs (+2 symbols, signature changed: fn execute)
-  modified: src/render/pipeline.rs (fields changed on RenderState)
-  added: src/render/postprocess.rs (14 symbols)
-
-Captured @ b7e1d4f (316 files, 89,421 lines)
-  parsed: 4, cached: 312, skipped: 0
-```
-
-### `charter read [tier]`
-
-Outputs structural context to stdout. Three tiers control verbosity:
-
-| Tier | Contents | Use when |
-|------|----------|----------|
-| `quick` | overview + types + hotspots | Orientation and API surface |
-| `default` | quick + dependents + clusters + calls | Normal usage |
-| `full` | default + symbols + dataflow + manifest + safety + errors | Deep analysis |
-
-```bash
-charter read          # default tier
-charter read quick    # minimal
-charter read full     # everything
-```
-
-**Options:**
-- `--focus <path>` — Filter output to a specific directory or file
-- `--since <ref>` — Show changes since a git ref (marks files with `[+]` added, `[~]` modified, `[-]` deleted)
-
-```bash
-charter read --focus src/pipeline    # Only show src/pipeline/**
-charter read --since HEAD~5          # Highlight changes in last 5 commits
-```
-
-### `charter lookup <symbol>`
-
-Look up a single symbol with full context:
-
-```
-$ charter lookup PipelineResult
-
-PipelineResult [struct] defined at src/pipeline.rs
-  pub struct PipelineResult {
-    pub files: Vec<FileResult>,
-    pub workspace: WorkspaceInfo,
-    pub git_info: Option<GitInfo>,
-    pub total_lines: usize,
-    pub skipped: Vec<SkippedFile>,
-    pub diff_summary: Option<DiffSummary>,
+```json
+{
+  "mcpServers": {
+    "charter": {
+      "command": "charter",
+      "args": ["serve", "."]
+    }
   }
-
-  Derives: Debug, Default
-  Referenced in 12 files:
-    src/output/calls.rs, src/output/clusters.rs, src/output/dataflow.rs, src/output/dependents.rs
+}
 ```
 
-### `charter query "<query>"`
+The server scans on startup, holds the full parsed index in memory, and responds to queries in sub-millisecond time. Use the `rescan` tool to pick up changes without restarting.
 
-Search for symbols, relationships, and patterns:
+## MCP Tools
 
-```bash
-charter query "callers of write_calls"     # What functions call write_calls?
-charter query "callees of capture"         # What does capture() call?
-charter query "implementors of Default"    # What types implement Default?
-charter query "users of Cache"             # What files use the Cache type?
-charter query "errors in pipeline.rs"      # Error propagation in a file
-charter query "hotspots"                   # High-complexity functions
-charter query "public api"                 # Public symbols only
-```
-
-### `charter deps [--crate <name>]`
-
-Analyze external dependency usage:
-
-```
-$ charter deps --crate tokio
-
-tokio (version from Cargo.toml)
-  Used in 12 files, 47 imports
-
-  Items used:
-    fs::read_to_string (8 files)
-    sync::Mutex (5 files)
-    task::spawn (4 files)
-    ...
-```
-
-### `charter tests [--file <path>]`
-
-Map tests to source files:
-
-```
-$ charter tests --file src/cache.rs
-
-Tests covering src/cache.rs:
-  tests/cache_tests.rs
-    test_cache_load
-    test_cache_save
-    test_cache_invalidation
-```
-
-### `charter session start|end|status`
-
-Track what changed during a work session:
-
-```bash
-charter session start    # Mark session start
-# ... do work ...
-charter session status   # See what changed
-charter session end      # End session tracking
-```
-
-### `charter serve [path]`
-
-Starts an [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server over stdio. The server scans the codebase on startup and holds the parsed index in memory, exposing 12 tools for structural queries. All tools return structured JSON.
+`charter serve [path]` starts the MCP server over stdio. All tools return structured JSON.
 
 ```bash
 charter serve           # serve current directory
 charter serve /path     # serve a specific project
 ```
-
-**MCP Tools:**
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
@@ -183,29 +62,21 @@ charter serve /path     # serve a specific project
 | `search_text` | `pattern`, `glob?`, `case_insensitive?`, `context_lines?`, `max_results?` | Regex text search across indexed files with context |
 | `rescan` | — | Re-scan codebase and persist cache |
 
-**MCP client configuration** (e.g. for Claude Desktop or Claude Code):
+## Capture
 
-```json
-{
-  "mcpServers": {
-    "charter": {
-      "command": "charter",
-      "args": ["serve", "/path/to/project"]
-    }
-  }
-}
-```
-
-### `charter status`
-
-Quick summary without full context output:
+Running `charter` with no subcommand generates or updates the `.charter/` directory. This is incremental — only files that changed since the last capture are re-parsed.
 
 ```
-$ charter status
-  files: 316
-  lines: 89,421
-  captured: 2025-01-31T14:23:07Z
-  commit: a3f8c2d
+$ charter
+
+Charter @ a3f8c2d → b7e1d4f | 3 modified, 1 added, 0 removed
+
+  modified: src/ecs/query.rs (+2 symbols, signature changed: fn execute)
+  modified: src/render/pipeline.rs (fields changed on RenderState)
+  added: src/render/postprocess.rs (14 symbols)
+
+Captured @ b7e1d4f (316 files, 89,421 lines)
+  parsed: 4, cached: 312, skipped: 0
 ```
 
 ## Output Files
@@ -321,77 +192,6 @@ extract_items [score: 67] (src/pipeline/parse.rs:129)
   cyclomatic: 8, lines: 89, calls: 23
 ```
 
-## Staleness Detection
-
-If files have changed since capture, `charter read` warns you:
-
-```
-⚠ 3 files changed since capture (a3f8c2d → b7e1d4f):
-  M src/ecs/world.rs
-  M src/render/pipeline.rs
-  A src/render/postprocess.rs
-
-Structural context below may be inaccurate for these files. Read them directly for current state.
-```
-
-## Preamble
-
-Every `charter read` includes a project-specific preamble:
-
-```
-[charter @ a3f8c2d | 2025-01-31T14:23:07Z | 316 files | 89,421 lines]
-
-Rust workspace with 4 crates. Primary: my-engine (lib).
-Entry points: my-app (bin), 12 examples, 3 benches
-
-Top traits by impl count:
-  Component (34 impls), System (12 impls), State (6 impls)
-
-Most-depended-on files:
-  src/lib.rs (56), src/ecs/world.rs (47), src/math/vec3.rs (38)
-
-Top referenced types:
-  Entity (89), Transform (67), Handle (45)
-
-High-churn files:
-  main.rs, pipeline.rs, widgets.rs
-```
-
-## LLM Integration
-
-### MCP Server (recommended for AI agents)
-
-Add charter as an MCP server in your client configuration. This gives your LLM direct access to structural queries without needing to parse text output:
-
-```json
-{
-  "mcpServers": {
-    "charter": {
-      "command": "charter",
-      "args": ["serve", "."]
-    }
-  }
-}
-```
-
-The MCP server holds the full parsed index in memory and responds to queries in sub-millisecond time. Use `rescan` to pick up changes without restarting.
-
-### CLI (for context recovery)
-
-Add this to your project's `CLAUDE.md`, `AGENTS.md`, or equivalent:
-
-```markdown
-## Codebase Context
-
-This project uses charter for structural context recovery. After context compaction or in a new session, if you've lost track of codebase structure:
-
-1. Run `charter read` to reload orientation, types, and complexity hotspots
-2. Use `charter lookup <Symbol>` for specific type/function/class details
-3. Use `charter query "callers of X"` to trace relationships
-
-The `.charter/` directory contains pre-computed analysis that's expensive to reconstruct from source: trait hierarchies (Protocols/ABCs for Python), call graphs, semantic clusters, and complexity rankings.
-```
-
 ## Performance
 
 | Operation | 500 files | 5000 files |
@@ -399,7 +199,7 @@ The `.charter/` directory contains pre-computed analysis that's expensive to rec
 | Cold capture | < 3s | < 15s |
 | Warm (0 changes) | < 100ms | < 100ms |
 | Warm (10 changes) | < 500ms | < 500ms |
-| `charter read` | < 50ms | < 50ms |
+| MCP query | < 1ms | < 1ms |
 
 ## How It Works
 
@@ -414,6 +214,11 @@ The `.charter/` directory contains pre-computed analysis that's expensive to rec
 - Build PascalCase symbol table from Phase 1
 - Match identifier locations against symbol table
 - Write cross-references with no additional I/O
+
+**Index:**
+- Build in-memory index from pipeline results
+- HashMaps for symbols, call graphs, reverse calls, implementations, references
+- MCP server queries this index directly for sub-millisecond responses
 
 ## License
 

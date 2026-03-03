@@ -305,7 +305,10 @@ async fn write_callers_section(
         .write_all(b"Functions that call each target, sorted by call count.\n\n")
         .await?;
 
-    for (target, callers) in targets_with_callers.iter().take(200) {
+    let total_targets = targets_with_callers.len();
+    let shown_targets = total_targets.min(200);
+
+    for (target, callers) in targets_with_callers.iter().take(shown_targets) {
         let header = format!("{} [{} callers]\n", target, callers.len());
         writer.write_all(header.as_bytes()).await?;
 
@@ -332,6 +335,14 @@ async fn write_callers_section(
         }
 
         writer.write_all(b"\n").await?;
+    }
+
+    if total_targets > shown_targets {
+        let line = format!(
+            "[+{} more targets not shown]\n",
+            total_targets - shown_targets
+        );
+        writer.write_all(line.as_bytes()).await?;
     }
 
     Ok(())
