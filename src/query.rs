@@ -1,60 +1,29 @@
 use anyhow::Result;
 use std::path::Path;
-use tokio::fs;
+
+use crate::extract::symbols::Visibility;
+use crate::index::{Index, build_index};
 
 pub async fn query(root: &Path, query_str: &str, limit: usize) -> Result<()> {
-    let charter_dir = root.join(".charter");
-
-    if !charter_dir.exists() {
-        eprintln!("No .charter/ directory found. Run 'charter' first.");
-        std::process::exit(1);
-    }
+    let index = build_index(root).await?;
 
     let query_type = parse_query(query_str);
 
     match query_type {
-        QueryType::CallersOf { target } => {
-            find_callers(&charter_dir, &target, limit).await?;
-        }
-        QueryType::CalleesOf { target } => {
-            find_callees(&charter_dir, &target, limit).await?;
-        }
-        QueryType::ImplementorsOf { trait_name } => {
-            find_implementors(&charter_dir, &trait_name, limit).await?;
-        }
-        QueryType::UsersOf { symbol } => {
-            find_users(&charter_dir, &symbol, limit).await?;
-        }
-        QueryType::ErrorsIn { file } => {
-            find_errors_in(&charter_dir, &file, limit).await?;
-        }
-        QueryType::Hotspots => {
-            find_hotspots(&charter_dir, limit).await?;
-        }
-        QueryType::PublicApi => {
-            find_public_api(&charter_dir, limit).await?;
-        }
-        QueryType::Panics => {
-            find_panics(&charter_dir, limit).await?;
-        }
-        QueryType::PanicsIn { file } => {
-            find_panics_in(&charter_dir, &file, limit).await?;
-        }
-        QueryType::UnsafeCode => {
-            find_unsafe_code(&charter_dir, limit).await?;
-        }
-        QueryType::AsyncFunctions => {
-            find_async_functions(&charter_dir, limit).await?;
-        }
-        QueryType::Lifetimes => {
-            find_lifetimes(&charter_dir, limit).await?;
-        }
-        QueryType::Tests => {
-            find_tests(&charter_dir, limit).await?;
-        }
-        QueryType::Keyword { terms } => {
-            keyword_search(&charter_dir, &terms, limit).await?;
-        }
+        QueryType::CallersOf { target } => find_callers(&index, &target, limit),
+        QueryType::CalleesOf { target } => find_callees(&index, &target, limit),
+        QueryType::ImplementorsOf { trait_name } => find_implementors(&index, &trait_name, limit),
+        QueryType::UsersOf { symbol } => find_users(&index, &symbol, limit),
+        QueryType::ErrorsIn { file } => find_errors_in(&index, &file, limit),
+        QueryType::Hotspots => find_hotspots(&index, limit),
+        QueryType::PublicApi => find_public_api(&index, limit),
+        QueryType::Panics => find_panics(&index, limit),
+        QueryType::PanicsIn { file } => find_panics_in(&index, &file, limit),
+        QueryType::UnsafeCode => find_unsafe_code(&index, limit),
+        QueryType::AsyncFunctions => find_async_functions(&index, limit),
+        QueryType::Lifetimes => find_lifetimes(&index, limit),
+        QueryType::Tests => find_tests(&index, limit),
+        QueryType::Keyword { terms } => keyword_search(&index, &terms, limit),
     }
 
     Ok(())
@@ -158,113 +127,114 @@ fn parse_query(query: &str) -> QueryType {
     QueryType::Keyword { terms }
 }
 
-async fn find_callers(charter_dir: &Path, target: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("calls.md")).await?;
-
+fn find_callers(index: &Index, target: &str, limit: usize) {
     println!("Callers of '{}':", target);
     println!();
 
-    let target_lower = target.to_lowercase();
-    let mut found = 0;
+    let mut callers = Vec::new();
 
-    for line in content.lines() {
-        if line.starts_with("  ") && line.contains(" → ") {
-            let parts: Vec<&str> = line.trim().splitn(2, " → ").collect();
-            if parts.len() == 2 {
-                let callees = parts[1];
-                let callees_lower = callees.to_lowercase();
-                if callees_lower.contains(&target_lower) {
-                    let caller = parts[0];
-                    println!("  {} calls {}", caller, target);
-                    found += 1;
-                    if found >= limit {
-                        break;
-                    }
-                }
-            }
+    if let Some(caller_list) = index.reverse_calls.get(target) {
+        callers.extend(caller_list.iter());
+    }
+
+    let suffix = format!("::{}", target);
+    for (qualified_name, caller_list) in &index.reverse_calls {
+        if qualified_name.ends_with(&suffix) && qualified_name.as_str() != target {
+            callers.extend(caller_list.iter());
         }
     }
 
-    if found == 0 {
+    callers.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.name.cmp(&b.name)));
+    callers.dedup_by(|a, b| a.file == b.file && a.name == b.name && a.line == b.line);
+
+    if callers.is_empty() {
         println!("  No callers found for '{}'", target);
     } else {
+        for caller in callers.iter().take(limit) {
+            let impl_suffix = caller
+                .impl_type
+                .as_deref()
+                .map(|t| format!(" (impl {})", t))
+                .unwrap_or_default();
+            println!(
+                "  {} ({}:{}){} calls {}",
+                caller.name, caller.file, caller.line, impl_suffix, target
+            );
+        }
         println!();
-        println!("Found {} caller(s)", found);
+        println!("Found {} caller(s)", callers.len().min(limit));
     }
-
-    Ok(())
 }
 
-async fn find_callees(charter_dir: &Path, target: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("calls.md")).await?;
-
+fn find_callees(index: &Index, target: &str, limit: usize) {
     println!("Callees of '{}':", target);
     println!();
 
-    let target_lower = target.to_lowercase();
+    let mut callees = Vec::new();
+
+    if let Some(targets) = index.call_graph.get(target) {
+        callees.extend(targets.iter());
+    }
+
+    let suffix = format!("::{}", target);
+    for (qualified_name, targets) in &index.call_graph {
+        if qualified_name.ends_with(&suffix) && qualified_name.as_str() != target {
+            callees.extend(targets.iter());
+        }
+    }
+
+    if callees.is_empty() {
+        println!("  No callees found for '{}'", target);
+    } else {
+        for callee in callees.iter().take(limit) {
+            let receiver = callee
+                .receiver_type
+                .as_deref()
+                .map(|t| format!(" [on {}]", t))
+                .unwrap_or_default();
+            println!(
+                "  {} → {}{} ({}:{})",
+                target, callee.name, receiver, callee.file, callee.line
+            );
+        }
+        println!();
+        println!("Found {} callee(s)", callees.len().min(limit));
+    }
+}
+
+fn find_implementors(index: &Index, trait_name: &str, limit: usize) {
+    println!("Implementors of '{}':", trait_name);
+    println!();
+
     let mut found = 0;
 
-    for line in content.lines() {
-        if line.starts_with("  ") && line.contains(" → ") {
-            let parts: Vec<&str> = line.trim().splitn(2, " → ").collect();
-            if parts.len() == 2 {
-                let caller = parts[0].to_lowercase();
-                if caller.contains(&target_lower) {
-                    let callees = parts[1];
-                    println!("  {} → {}", parts[0], callees);
+    if let Some(impls) = index.impl_map.get(trait_name) {
+        for impl_info in impls.iter().take(limit) {
+            println!(
+                "  {} implements {} ({}:{})",
+                impl_info.type_name, trait_name, impl_info.file, impl_info.line
+            );
+            found += 1;
+        }
+    }
+
+    let trait_lower = trait_name.to_lowercase();
+    if found == 0 {
+        for (name, impls) in &index.impl_map {
+            if name.to_lowercase().contains(&trait_lower) && name != trait_name {
+                for impl_info in impls {
+                    println!(
+                        "  {} implements {} ({}:{})",
+                        impl_info.type_name, name, impl_info.file, impl_info.line
+                    );
                     found += 1;
                     if found >= limit {
                         break;
                     }
                 }
             }
-        }
-    }
-
-    if found == 0 {
-        println!("  No callees found for '{}'", target);
-    } else {
-        println!();
-        println!("Found {} match(es)", found);
-    }
-
-    Ok(())
-}
-
-async fn find_implementors(charter_dir: &Path, trait_name: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("types.md")).await?;
-
-    println!("Implementors of '{}':", trait_name);
-    println!();
-
-    let trait_lower = trait_name.to_lowercase();
-    let mut found = 0;
-    let mut in_impls = false;
-
-    for line in content.lines() {
-        if line == "Impls:" {
-            in_impls = true;
-            continue;
-        }
-
-        if in_impls {
-            if !line.starts_with("  ") && !line.is_empty() {
+            if found >= limit {
                 break;
-            }
-
-            if line.starts_with("  ") && line.contains(" -> ") {
-                let parts: Vec<&str> = line.trim().splitn(2, " -> ").collect();
-                if parts.len() == 2 {
-                    let impl_trait = parts[0].to_lowercase();
-                    if impl_trait.contains(&trait_lower) {
-                        let types = parts[1].trim_start_matches('[').trim_end_matches(']');
-                        println!("  {} implements {}", types, parts[0]);
-                        found += 1;
-                        if found >= limit {
-                            break;
-                        }
-                    }
-                }
             }
         }
     }
@@ -275,53 +245,35 @@ async fn find_implementors(charter_dir: &Path, trait_name: &str, limit: usize) -
         println!();
         println!("Found {} trait implementation(s)", found);
     }
-
-    Ok(())
 }
 
-async fn find_users(charter_dir: &Path, symbol: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("refs.md")).await?;
-
+fn find_users(index: &Index, symbol: &str, limit: usize) {
     println!("References to '{}':", symbol);
     println!();
 
-    let symbol_lower = symbol.to_lowercase();
     let mut found = 0;
 
-    for line in content.lines() {
-        if line.starts_with('[') || line.is_empty() {
-            continue;
-        }
-
-        if let Some((name_part, _)) = line.split_once(" [") {
-            if name_part.to_lowercase() == symbol_lower {
-                println!("  {}", line);
-                found += 1;
-                if found >= limit {
-                    break;
-                }
-            }
+    if let Some(refs) = index.references.get(symbol) {
+        for (file, line) in refs.iter().take(limit) {
+            println!("  {}:{}", file, line);
+            found += 1;
         }
     }
 
     if found == 0 {
-        let symbols_content = fs::read_to_string(charter_dir.join("symbols.md"))
-            .await
-            .unwrap_or_default();
+        let symbol_lower = symbol.to_lowercase();
         let mut partial_matches = Vec::new();
 
-        for line in symbols_content.lines() {
-            if line.starts_with("  ") && !line.starts_with("    ") {
-                let trimmed = line.trim();
-                if trimmed.to_lowercase().contains(&symbol_lower) {
-                    partial_matches.push(trimmed.to_string());
-                }
+        for name in index.symbols_by_name.keys() {
+            if name.to_lowercase().contains(&symbol_lower) {
+                partial_matches.push(name.as_str());
             }
         }
 
         if partial_matches.is_empty() {
             println!("  No references found for '{}'", symbol);
         } else {
+            partial_matches.sort();
             println!("  No exact matches. Similar symbols:");
             for sym_match in partial_matches.iter().take(5) {
                 println!("    {}", sym_match);
@@ -331,98 +283,102 @@ async fn find_users(charter_dir: &Path, symbol: &str, limit: usize) -> Result<()
         println!();
         println!("Found {} reference(s)", found);
     }
-
-    Ok(())
 }
 
-async fn find_errors_in(charter_dir: &Path, file: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("errors.md")).await?;
-
+fn find_errors_in(index: &Index, file: &str, limit: usize) {
     println!("Errors in '{}':", file);
     println!();
 
     let file_lower = file.to_lowercase();
     let mut found = 0;
-    let mut current_matches = false;
 
-    for line in content.lines() {
-        if line.contains(":") && !line.starts_with("  ") && !line.starts_with("#") {
-            let file_path = line.split(':').next().unwrap_or("");
-            current_matches = file_path.to_lowercase().contains(&file_lower);
+    for file_result in &index.result.files {
+        if !file_result
+            .relative_path
+            .to_lowercase()
+            .contains(&file_lower)
+        {
+            continue;
+        }
 
-            if current_matches {
-                println!("{}", line);
-                found += 1;
-                if found >= limit {
-                    break;
-                }
+        for error_info in &file_result.parsed.error_info {
+            let func_name = error_info.function_id.qualified_name();
+            println!(
+                "  {} ({}:{}) → {:?}",
+                func_name, file_result.relative_path, error_info.line, error_info.return_type
+            );
+            found += 1;
+            if found >= limit {
+                break;
             }
-        } else if current_matches && line.starts_with("  ") {
-            println!("{}", line);
+        }
+
+        if found >= limit {
+            break;
         }
     }
 
     if found == 0 {
         println!("  No error patterns found in '{}'", file);
     }
-
-    Ok(())
 }
 
-async fn find_hotspots(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("hotspots.md")).await?;
-
-    println!("Top {} hotspots by importance:", limit);
+fn find_hotspots(index: &Index, limit: usize) {
+    println!("Top {} hotspots by complexity:", limit);
     println!();
 
-    let mut found = 0;
+    let mut hotspots: Vec<(String, String, usize, u32)> = Vec::new();
 
-    for line in content.lines() {
-        if line.contains("[score=") && !line.starts_with("#") && !line.starts_with("[") {
-            println!("  {}", line);
-            found += 1;
-            if found >= limit {
-                break;
-            }
+    for file in &index.result.files {
+        for cx in &file.parsed.complexity {
+            hotspots.push((
+                cx.qualified_name(),
+                file.relative_path.clone(),
+                cx.line,
+                cx.metrics.cyclomatic,
+            ));
         }
     }
 
-    if found == 0 {
-        println!("  No hotspots found");
-    }
+    hotspots.sort_by(|a, b| b.3.cmp(&a.3));
 
-    Ok(())
+    if hotspots.is_empty() {
+        println!("  No hotspots found");
+    } else {
+        for (name, file, line, cyclomatic) in hotspots.iter().take(limit) {
+            println!("  {} [score={}] ({}:{})", name, cyclomatic, file, line);
+        }
+    }
 }
 
-async fn find_public_api(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("symbols.md")).await?;
-
+fn find_public_api(index: &Index, limit: usize) {
     println!("Public API (first {} items):", limit);
     println!();
 
     let mut found = 0;
-    let mut current_file = String::new();
 
-    for line in content.lines() {
-        if !line.starts_with(' ')
-            && !line.is_empty()
-            && !line.starts_with('[')
-            && line.contains(".rs")
-        {
-            current_file = line.split_whitespace().next().unwrap_or("").to_string();
-        }
-
-        if line.starts_with("  pub ") && !line.starts_with("    ") {
-            let trimmed = line.trim();
-            if trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("pub struct ")
-                || trimmed.starts_with("pub enum ")
-                || trimmed.starts_with("pub trait ")
-            {
-                println!("  {} → {}", current_file, trimmed);
+    for file in &index.result.files {
+        for symbol in &file.parsed.symbols.symbols {
+            if symbol.visibility == Visibility::Public {
+                let kind = match &symbol.kind {
+                    crate::extract::symbols::SymbolKind::Function { signature, .. } => {
+                        format!("fn {}", signature)
+                    }
+                    crate::extract::symbols::SymbolKind::Struct { .. } => {
+                        format!("struct {}", symbol.name)
+                    }
+                    crate::extract::symbols::SymbolKind::Enum { .. } => {
+                        format!("enum {}", symbol.name)
+                    }
+                    crate::extract::symbols::SymbolKind::Trait { .. } => {
+                        format!("trait {}", symbol.name)
+                    }
+                    _ => continue,
+                };
+                println!("  {} → pub {}", file.relative_path, kind);
                 found += 1;
                 if found >= limit {
-                    break;
+                    return;
                 }
             }
         }
@@ -431,38 +387,273 @@ async fn find_public_api(charter_dir: &Path, limit: usize) -> Result<()> {
     if found == 0 {
         println!("  No public API found");
     }
-
-    Ok(())
 }
 
-async fn keyword_search(charter_dir: &Path, terms: &[String], limit: usize) -> Result<()> {
+fn find_panics(index: &Index, limit: usize) {
+    println!("Panic Points (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+
+    for file in &index.result.files {
+        for panic_point in &file.parsed.safety.panic_points {
+            let func = panic_point
+                .containing_function
+                .as_deref()
+                .unwrap_or("(top-level)");
+            println!(
+                "  {:?} in {} ({}:{})",
+                panic_point.kind, func, file.relative_path, panic_point.line
+            );
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+        if found >= limit {
+            break;
+        }
+    }
+
+    if found == 0 {
+        println!("  No panic points found");
+    }
+}
+
+fn find_panics_in(index: &Index, file: &str, limit: usize) {
+    println!("Panic Points in '{}':", file);
+    println!();
+
+    let file_lower = file.to_lowercase();
+    let mut found = 0;
+
+    for file_result in &index.result.files {
+        if !file_result
+            .relative_path
+            .to_lowercase()
+            .contains(&file_lower)
+        {
+            continue;
+        }
+
+        for panic_point in &file_result.parsed.safety.panic_points {
+            let func = panic_point
+                .containing_function
+                .as_deref()
+                .unwrap_or("(top-level)");
+            println!(
+                "  {:?} in {} ({}:{})",
+                panic_point.kind, func, file_result.relative_path, panic_point.line
+            );
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+
+        if found >= limit {
+            break;
+        }
+    }
+
+    if found == 0 {
+        println!("  No panic points found in '{}'", file);
+    }
+}
+
+fn find_unsafe_code(index: &Index, limit: usize) {
+    println!("Unsafe Code (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+
+    for file in &index.result.files {
+        for unsafe_block in &file.parsed.safety.unsafe_blocks {
+            let func = unsafe_block
+                .containing_function
+                .as_deref()
+                .unwrap_or("(top-level)");
+            let ops: Vec<String> = unsafe_block
+                .operations
+                .iter()
+                .map(|op| format!("{:?}", op))
+                .collect();
+            println!(
+                "  {} in {} ({}:{}) [{}]",
+                func,
+                file.relative_path,
+                unsafe_block.line,
+                file.relative_path,
+                ops.join(", ")
+            );
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+        if found >= limit {
+            break;
+        }
+    }
+
+    if found == 0 {
+        println!("  No unsafe blocks found");
+    }
+}
+
+fn find_async_functions(index: &Index, limit: usize) {
+    println!("Async Analysis (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+
+    for file in &index.result.files {
+        for async_fn in &file.parsed.async_info.async_functions {
+            let qualified = match &async_fn.impl_type {
+                Some(t) => format!("{}::{}", t, async_fn.name),
+                None => async_fn.name.clone(),
+            };
+            println!(
+                "  async {} ({}:{}) [{} awaits, {} spawns]",
+                qualified,
+                file.relative_path,
+                async_fn.line,
+                async_fn.awaits.len(),
+                async_fn.spawns.len()
+            );
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+        if found >= limit {
+            break;
+        }
+    }
+
+    if found == 0 {
+        println!("  No async functions found");
+    }
+}
+
+fn find_lifetimes(index: &Index, limit: usize) {
+    println!("Lifetime Analysis (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+
+    for file in &index.result.files {
+        for func_lt in &file.parsed.lifetimes.function_lifetimes {
+            let qualified = match &func_lt.impl_type {
+                Some(t) => format!("{}::{}", t, func_lt.function_name),
+                None => func_lt.function_name.clone(),
+            };
+            println!(
+                "  {} ({}:{}) lifetimes: [{}]{}",
+                qualified,
+                file.relative_path,
+                func_lt.line,
+                func_lt.lifetimes.join(", "),
+                if func_lt.has_static {
+                    " (has 'static)"
+                } else {
+                    ""
+                }
+            );
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+        if found >= limit {
+            break;
+        }
+    }
+
+    if found == 0 {
+        println!("  No lifetime information found");
+    }
+}
+
+fn find_tests(index: &Index, limit: usize) {
+    println!("Test Coverage (first {}):", limit);
+    println!();
+
+    let mut found = 0;
+
+    for file in &index.result.files {
+        if file.parsed.test_functions.is_empty() {
+            continue;
+        }
+
+        println!(
+            "  {} [{} tests]{}",
+            file.relative_path,
+            file.parsed.test_functions.len(),
+            if file.parsed.has_test_module {
+                " (has #[cfg(test)] module)"
+            } else {
+                ""
+            }
+        );
+
+        for test_fn in &file.parsed.test_functions {
+            println!("    {}", test_fn);
+            found += 1;
+            if found >= limit {
+                break;
+            }
+        }
+
+        if found >= limit {
+            break;
+        }
+    }
+
+    if found == 0 {
+        println!("  No test coverage information found");
+    }
+}
+
+fn keyword_search(index: &Index, terms: &[String], limit: usize) {
+    println!("Search results for '{}':", terms.join(" "));
+    println!();
+
     let mut results: Vec<(String, f32)> = Vec::new();
 
-    let symbols_content = fs::read_to_string(charter_dir.join("symbols.md"))
-        .await
-        .unwrap_or_default();
-    search_in_content(&symbols_content, terms, "symbols", &mut results);
+    for (name, syms) in &index.symbols_by_name {
+        let name_lower = name.to_lowercase();
+        let mut score = 0.0f32;
 
-    let types_content = fs::read_to_string(charter_dir.join("types.md"))
-        .await
-        .unwrap_or_default();
-    search_in_content(&types_content, terms, "types", &mut results);
+        for term in terms {
+            if name_lower.contains(term) {
+                score += 1.0;
+                if name_lower.starts_with(term) {
+                    score += 0.5;
+                }
+            } else {
+                let fuzzy = fuzzy_score(&name_lower, term);
+                if fuzzy > 0.7 {
+                    score += fuzzy;
+                }
+            }
+        }
 
-    let calls_content = fs::read_to_string(charter_dir.join("calls.md"))
-        .await
-        .unwrap_or_default();
-    search_in_content(&calls_content, terms, "calls", &mut results);
-
-    let errors_content = fs::read_to_string(charter_dir.join("errors.md"))
-        .await
-        .unwrap_or_default();
-    search_in_content(&errors_content, terms, "errors", &mut results);
+        if score > 0.0 {
+            for sym in syms {
+                results.push((
+                    format!(
+                        "[{}] {} {} ({}:{})",
+                        sym.kind, sym.visibility, name, sym.file, sym.line
+                    ),
+                    score,
+                ));
+            }
+        }
+    }
 
     results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     results.dedup_by(|a, b| a.0 == b.0);
-
-    println!("Search results for '{}':", terms.join(" "));
-    println!();
 
     if results.is_empty() {
         println!("  No results found");
@@ -473,48 +664,9 @@ async fn keyword_search(charter_dir: &Path, terms: &[String], limit: usize) -> R
         println!();
         println!("Found {} result(s)", results.len().min(limit));
     }
-
-    Ok(())
 }
 
-fn search_in_content(
-    content: &str,
-    terms: &[String],
-    source: &str,
-    results: &mut Vec<(String, f32)>,
-) {
-    for line in content.lines() {
-        if line.starts_with('[') || line.is_empty() {
-            continue;
-        }
-
-        let line_lower = line.to_lowercase();
-        let mut score = 0.0;
-
-        for term in terms {
-            if line_lower.contains(term) {
-                score += 1.0;
-                if line.trim().to_lowercase().starts_with(term) {
-                    score += 0.5;
-                }
-            } else {
-                let fuzzy_score = fuzzy_match(&line_lower, term);
-                if fuzzy_score > 0.7 {
-                    score += fuzzy_score;
-                }
-            }
-        }
-
-        if score > 0.0 {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && trimmed.len() < 200 {
-                results.push((format!("[{}] {}", source, trimmed), score));
-            }
-        }
-    }
-}
-
-fn fuzzy_match(text: &str, pattern: &str) -> f32 {
+fn fuzzy_score(text: &str, pattern: &str) -> f32 {
     if text.contains(pattern) {
         return 1.0;
     }
@@ -573,234 +725,4 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     }
 
     matrix[a_len][b_len]
-}
-
-async fn find_panics(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
-
-    println!("Panic Points (first {}):", limit);
-    println!();
-
-    let mut found = 0;
-    let mut in_panics = false;
-
-    for line in content.lines() {
-        if line == "## Panic Points" {
-            in_panics = true;
-            continue;
-        }
-
-        if in_panics {
-            if line.starts_with("## ") && line != "## Panic Points" {
-                break;
-            }
-
-            if line.contains(":")
-                && (line.contains(".unwrap()")
-                    || line.contains(".expect(")
-                    || line.contains("panic!")
-                    || line.contains("L") && line.contains("in "))
-            {
-                println!("  {}", line.trim());
-                found += 1;
-                if found >= limit {
-                    break;
-                }
-            } else if line.starts_with("Summary:")
-                || line.starts_with("  .unwrap")
-                || line.starts_with("  index")
-                || line.starts_with("  panic")
-                || line.starts_with("  assert")
-            {
-                println!("{}", line);
-            }
-        }
-    }
-
-    if found == 0 {
-        println!("  No panic points found (run 'charter' to generate safety.md)");
-    }
-
-    Ok(())
-}
-
-async fn find_panics_in(charter_dir: &Path, file: &str, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
-
-    println!("Panic Points in '{}':", file);
-    println!();
-
-    let file_lower = file.to_lowercase();
-    let mut found = 0;
-
-    for line in content.lines() {
-        let matches_file = line.contains(&file_lower)
-            || (line.contains(":") && line.to_lowercase().contains(&file_lower));
-        let is_panic_line = line.contains(".unwrap()")
-            || line.contains(".expect(")
-            || line.contains("panic!")
-            || line.contains(" in ");
-
-        if matches_file && is_panic_line {
-            println!("  {}", line.trim());
-            found += 1;
-            if found >= limit {
-                break;
-            }
-        }
-    }
-
-    if found == 0 {
-        println!("  No panic points found in '{}'", file);
-    }
-
-    Ok(())
-}
-
-async fn find_unsafe_code(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
-
-    println!("Unsafe Code (first {}):", limit);
-    println!();
-
-    let mut found = 0;
-    let mut in_unsafe = false;
-
-    for line in content.lines() {
-        if line == "## Unsafe Blocks" || line == "## Unsafe Code" {
-            in_unsafe = true;
-            continue;
-        }
-
-        if in_unsafe {
-            if line.starts_with("## ") {
-                break;
-            }
-
-            if !line.is_empty() && !line.starts_with('#') {
-                println!("  {}", line.trim());
-                found += 1;
-                if found >= limit {
-                    break;
-                }
-            }
-        }
-    }
-
-    if found == 0 {
-        println!("  No unsafe blocks found");
-    }
-
-    Ok(())
-}
-
-async fn find_async_functions(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
-
-    println!("Async Analysis (first {}):", limit);
-    println!();
-
-    let mut found = 0;
-    let mut in_async = false;
-
-    for line in content.lines() {
-        if line == "## Async Analysis" {
-            in_async = true;
-            continue;
-        }
-
-        if in_async {
-            if line.starts_with("## ") && line != "## Async Analysis" {
-                break;
-            }
-
-            if !line.is_empty() {
-                println!("{}", line);
-                found += 1;
-                if found >= limit {
-                    break;
-                }
-            }
-        }
-    }
-
-    if found == 0 {
-        println!("  No async analysis found");
-    }
-
-    Ok(())
-}
-
-async fn find_lifetimes(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
-
-    println!("Lifetime Analysis (first {}):", limit);
-    println!();
-
-    let mut found = 0;
-    let mut in_lifetimes = false;
-
-    for line in content.lines() {
-        if line == "## Lifetime Analysis" {
-            in_lifetimes = true;
-            continue;
-        }
-
-        if in_lifetimes {
-            if line.starts_with("## ") && line != "## Lifetime Analysis" {
-                break;
-            }
-
-            if !line.is_empty() {
-                println!("{}", line);
-                found += 1;
-                if found >= limit {
-                    break;
-                }
-            }
-        }
-    }
-
-    if found == 0 {
-        println!("  No lifetime information found");
-    }
-
-    Ok(())
-}
-
-async fn find_tests(charter_dir: &Path, limit: usize) -> Result<()> {
-    let content = fs::read_to_string(charter_dir.join("safety.md")).await?;
-
-    println!("Test Coverage (first {}):", limit);
-    println!();
-
-    let mut found = 0;
-    let mut in_tests = false;
-
-    for line in content.lines() {
-        if line == "## Test Coverage" {
-            in_tests = true;
-            continue;
-        }
-
-        if in_tests {
-            if line.starts_with("## ") && line != "## Test Coverage" {
-                break;
-            }
-
-            if !line.is_empty() {
-                println!("{}", line);
-                found += 1;
-                if found >= limit {
-                    break;
-                }
-            }
-        }
-    }
-
-    if found == 0 {
-        println!("  No test coverage information found");
-    }
-
-    Ok(())
 }

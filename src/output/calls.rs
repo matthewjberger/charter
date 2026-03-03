@@ -291,7 +291,7 @@ async fn write_callers_section(
 ) -> Result<()> {
     let mut targets_with_callers: Vec<(&String, &Vec<CallerEntry>)> = reverse_graph
         .iter()
-        .filter(|(_, callers)| callers.len() >= 3)
+        .filter(|(_, callers)| !callers.is_empty())
         .collect();
 
     if targets_with_callers.is_empty() {
@@ -305,7 +305,7 @@ async fn write_callers_section(
         .write_all(b"Functions that call each target, sorted by call count.\n\n")
         .await?;
 
-    for (target, callers) in targets_with_callers.iter().take(50) {
+    for (target, callers) in targets_with_callers.iter().take(200) {
         let header = format!("{} [{} callers]\n", target, callers.len());
         writer.write_all(header.as_bytes()).await?;
 
