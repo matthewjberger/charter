@@ -31,8 +31,21 @@ thread_local! {
     });
 }
 
+fn find_cargo_lock(root: &Path) -> Result<PathBuf> {
+    let mut dir = root.to_path_buf();
+    loop {
+        let candidate = dir.join("Cargo.lock");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        if !dir.pop() {
+            return Err(anyhow::anyhow!("Cargo.lock not found"));
+        }
+    }
+}
+
 pub fn parse_cargo_lock(root: &Path) -> Result<Vec<(String, String)>> {
-    let lock_path = root.join("Cargo.lock");
+    let lock_path = find_cargo_lock(root)?;
     let content = std::fs::read_to_string(&lock_path)?;
     let mut packages = Vec::new();
     let mut current_name: Option<String> = None;
@@ -136,10 +149,23 @@ pub fn collect_external_crates(
 
 pub fn parse_direct_deps(root: &Path) -> HashSet<String> {
     let mut deps = HashSet::new();
-    let cargo_toml = root.join("Cargo.toml");
-    let content = match std::fs::read_to_string(&cargo_toml) {
+    extract_deps_from_toml(&root.join("Cargo.toml"), &mut deps);
+    let mut dir = root.to_path_buf();
+    while dir.pop() {
+        let parent_toml = dir.join("Cargo.toml");
+        if parent_toml.exists() {
+            extract_deps_from_toml(&parent_toml, &mut deps);
+        } else {
+            break;
+        }
+    }
+    deps
+}
+
+fn extract_deps_from_toml(path: &Path, deps: &mut HashSet<String>) {
+    let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return deps,
+        Err(_) => return,
     };
 
     let mut in_deps_section = false;
@@ -162,8 +188,6 @@ pub fn parse_direct_deps(root: &Path) -> HashSet<String> {
             }
         }
     }
-
-    deps
 }
 
 const MAX_EXTERNAL_SOURCE_FILES: usize = 200;
