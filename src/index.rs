@@ -19,6 +19,9 @@ pub struct Index {
     pub reverse_calls: HashMap<String, Vec<CallerInfo>>,
     pub derive_map: HashMap<String, Vec<String>>,
     pub snippets_by_name: HashMap<String, Vec<SnippetInfo>>,
+    pub imports_by_file: HashMap<String, Vec<FileImport>>,
+    pub imports_by_symbol: HashMap<String, Vec<ImportLocation>>,
+    pub external_symbols: HashMap<String, Vec<ExternalSymbolInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +56,8 @@ pub struct SnippetInfo {
     pub end_line: usize,
     pub body: String,
     pub importance_score: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +68,31 @@ pub struct SymbolInfo {
     pub line: usize,
     pub signature: Option<String>,
     pub visibility: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExternalSymbolInfo {
+    pub name: String,
+    pub kind: String,
+    pub crate_name: String,
+    pub file: String,
+    pub line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileImport {
+    pub path: String,
+    pub line: usize,
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportLocation {
+    pub file: String,
+    pub source_path: String,
+    pub line: usize,
 }
 
 impl Index {
@@ -78,6 +108,9 @@ impl Index {
         let mut reverse_calls: HashMap<String, Vec<CallerInfo>> = HashMap::new();
         let mut derive_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut snippets_by_name: HashMap<String, Vec<SnippetInfo>> = HashMap::new();
+        let mut imports_by_file: HashMap<String, Vec<FileImport>> = HashMap::new();
+        let mut imports_by_symbol: HashMap<String, Vec<ImportLocation>> = HashMap::new();
+        let external_symbols: HashMap<String, Vec<ExternalSymbolInfo>> = HashMap::new();
 
         for file in &result.files {
             for symbol in &file.parsed.symbols.symbols {
@@ -174,10 +207,17 @@ impl Index {
                 let caller_impl_type = call_info.caller.impl_type.clone();
                 let caller_line = call_info.line;
                 for callee in &call_info.callees {
-                    let callee_name = callee.qualified_target();
+                    let resolved_type = match (&callee.target_type, &caller_impl_type) {
+                        (Some(t), Some(concrete)) if t == "Self" => Some(concrete.clone()),
+                        (other, _) => other.clone(),
+                    };
+                    let callee_name = match &resolved_type {
+                        Some(type_name) => format!("{}::{}", type_name, callee.target),
+                        None => callee.target.clone(),
+                    };
                     let target = CallTarget {
                         name: callee_name.clone(),
-                        receiver_type: callee.target_type.clone(),
+                        receiver_type: resolved_type,
                         file: file.relative_path.clone(),
                         line: callee.line,
                     };
@@ -225,6 +265,14 @@ impl Index {
                 };
                 let body_text = body_text_from_captured(&captured.body);
                 let end_line = compute_end_line(captured.line, &captured.body);
+                let hint = if captured.body.full_text.is_none() {
+                    Some(format!(
+                        "Use read_source(file=\"{}\", start_line={}, end_line={}) for full source",
+                        file.relative_path, captured.line, end_line,
+                    ))
+                } else {
+                    None
+                };
                 let snippet = SnippetInfo {
                     function_name: captured.function_name.clone(),
                     impl_type: captured.impl_type.clone(),
@@ -233,6 +281,7 @@ impl Index {
                     end_line,
                     body: body_text,
                     importance_score: captured.importance_score,
+                    hint,
                 };
                 snippets_by_name
                     .entry(key.clone())
@@ -243,6 +292,29 @@ impl Index {
                         .entry(captured.function_name.clone())
                         .or_default()
                         .push(snippet);
+                }
+            }
+
+            for import in &file.parsed.imports {
+                let symbols = parse_import_symbols(&import.path);
+                let file_import = FileImport {
+                    path: import.path.clone(),
+                    line: import.line,
+                    symbols: symbols.clone(),
+                };
+                imports_by_file
+                    .entry(file.relative_path.clone())
+                    .or_default()
+                    .push(file_import);
+                for symbol in symbols {
+                    imports_by_symbol
+                        .entry(symbol)
+                        .or_default()
+                        .push(ImportLocation {
+                            file: file.relative_path.clone(),
+                            source_path: import.path.clone(),
+                            line: import.line,
+                        });
                 }
             }
         }
@@ -273,6 +345,9 @@ impl Index {
             reverse_calls,
             derive_map,
             snippets_by_name,
+            imports_by_file,
+            imports_by_symbol,
+            external_symbols,
         }
     }
 }
@@ -344,6 +419,59 @@ fn body_text_from_captured(body: &FunctionBody) -> String {
         return parts.join("; ");
     }
     "[body not captured]".to_string()
+}
+
+fn parse_import_symbols(path: &str) -> Vec<String> {
+    let path = path.trim_start_matches("use ");
+    let path = path.trim_end_matches(';');
+
+    if let Some(brace_start) = path.find('{') {
+        if let Some(brace_end) = path.rfind('}') {
+            let inner = &path[brace_start + 1..brace_end];
+            return inner
+                .split(',')
+                .filter_map(|segment| {
+                    let segment = segment.trim();
+                    if segment.is_empty() {
+                        return None;
+                    }
+                    if segment.contains('{') {
+                        let nested = parse_import_symbols(segment);
+                        return Some(nested);
+                    }
+                    let name = if let Some(alias_pos) = segment.find(" as ") {
+                        &segment[alias_pos + 4..]
+                    } else {
+                        segment.rsplit("::").next().unwrap_or(segment)
+                    };
+                    let name = name.trim();
+                    if name.is_empty() || name == "*" || name == "self" {
+                        None
+                    } else {
+                        Some(vec![name.to_string()])
+                    }
+                })
+                .flatten()
+                .collect();
+        }
+    }
+
+    if let Some(alias_pos) = path.find(" as ") {
+        let name = path[alias_pos + 4..].trim();
+        if !name.is_empty() {
+            return vec![name.to_string()];
+        }
+    }
+
+    if path.ends_with("::*") {
+        return vec![format!("{}::*", path.trim_end_matches("::*"))];
+    }
+
+    let last_segment = path.rsplit("::").next().unwrap_or(path).trim();
+    if last_segment.is_empty() || last_segment == "self" {
+        return Vec::new();
+    }
+    vec![last_segment.to_string()]
 }
 
 pub async fn build_index(root: &Path) -> Result<Index> {

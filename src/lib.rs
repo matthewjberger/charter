@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod cli;
 pub mod detect;
+pub mod external;
 pub mod extract;
 pub mod git;
 pub mod index;

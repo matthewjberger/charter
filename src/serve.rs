@@ -18,8 +18,12 @@ use tokio::sync::RwLock;
 
 use crate::cache::Cache;
 use crate::detect::detect_workspace;
+use crate::external;
 use crate::extract::symbols::{SymbolKind, Visibility};
-use crate::index::{CallTarget, CallerInfo, ImplInfo, Index, SnippetInfo};
+use crate::index::{
+    CallTarget, CallerInfo, ExternalSymbolInfo, FileImport, ImplInfo, ImportLocation, Index,
+    SnippetInfo,
+};
 use crate::pipeline::{self, FileResult, walk};
 
 #[derive(Clone)]
@@ -87,6 +91,20 @@ pub struct SearchSymbolsParams {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GetSnippetParams {
     pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GetImportsParams {
+    pub file: Option<String>,
+    pub symbol: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetImportsResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_imports: Option<Vec<FileImport>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol_locations: Option<Vec<ImportLocation>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -250,6 +268,8 @@ pub struct SymbolResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
     pub visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crate_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -462,6 +482,40 @@ impl CharterServer {
                         line: sym.line,
                         signature: sym.signature.clone(),
                         visibility: sym.visibility.clone(),
+                        crate_name: None,
+                    },
+                ));
+            }
+        }
+
+        for (name, ext_syms) in &index.external_symbols {
+            let score = if let Some(ref re) = compiled_regex {
+                if re.is_match(name) { 50 } else { 0 }
+            } else {
+                let name_lower = name.to_lowercase();
+                let bare_lower = bare_name(&name_lower);
+                let raw = symbol_match_score(&query, &name_lower, bare_lower);
+                raw / 2
+            };
+            if score == 0 {
+                continue;
+            }
+            for sym in ext_syms {
+                if let Some(ref kind_filter) = params.0.kind {
+                    if &sym.kind != kind_filter {
+                        continue;
+                    }
+                }
+                scored_symbols.push((
+                    score,
+                    SymbolResult {
+                        name: name.clone(),
+                        kind: sym.kind.clone(),
+                        file: format!("[{}] {}", sym.crate_name, sym.file),
+                        line: sym.line,
+                        signature: sym.signature.clone(),
+                        visibility: "pub".to_string(),
+                        crate_name: Some(sym.crate_name.clone()),
                     },
                 ));
             }
@@ -547,6 +601,7 @@ impl CharterServer {
                         line: sym.line,
                         signature: sym.signature.clone(),
                         visibility: sym.visibility.clone(),
+                        crate_name: None,
                     },
                 ));
             }
@@ -1189,6 +1244,54 @@ impl CharterServer {
     }
 
     #[tool(
+        description = "Get import/use statements. If file is given, returns all imports in that file. If symbol is given, returns all files that import that symbol. Both can be specified."
+    )]
+    async fn get_imports(
+        &self,
+        params: Parameters<GetImportsParams>,
+    ) -> Result<String, McpError> {
+        let index = self.index.read().await;
+
+        let file_imports = params.0.file.as_ref().map(|file| {
+            let mut results = Vec::new();
+            if let Some(imports) = index.imports_by_file.get(file) {
+                results.extend(imports.clone());
+            }
+            for (key, imports) in &index.imports_by_file {
+                if key != file && (key.ends_with(file) || file.ends_with(key.as_str())) {
+                    results.extend(imports.clone());
+                }
+            }
+            results
+        });
+
+        let symbol_locations = params.0.symbol.as_ref().map(|symbol| {
+            let mut results = Vec::new();
+            if let Some(locations) = index.imports_by_symbol.get(symbol) {
+                results.extend(locations.clone());
+            }
+            for (key, locations) in &index.imports_by_symbol {
+                if key != symbol && (key.ends_with(symbol) || symbol.ends_with(key.as_str())) {
+                    results.extend(locations.clone());
+                }
+            }
+            results
+        });
+
+        if file_imports.as_ref().is_none_or(|v| v.is_empty())
+            && symbol_locations.as_ref().is_none_or(|v| v.is_empty())
+        {
+            return Ok("{\"error\": \"No imports found. Provide file or symbol parameter.\"}".to_string());
+        }
+
+        let result = GetImportsResult {
+            file_imports,
+            symbol_locations,
+        };
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    #[tool(
         description = "Get the function body/implementation of a symbol. Returns captured snippets with importance scores."
     )]
     async fn get_snippet(&self, params: Parameters<GetSnippetParams>) -> Result<String, McpError> {
@@ -1292,6 +1395,34 @@ impl CharterServer {
                             line: symbol.line,
                             visibility: format!("{}", symbol.visibility),
                             generics: symbol.generics.clone(),
+                            definition: def,
+                        });
+                    }
+                }
+            }
+            definitions.truncate(10);
+        }
+
+        if definitions.is_empty() {
+            for (name, ext_syms) in &index.external_symbols {
+                let name_lower = name.to_lowercase();
+                let bare = bare_name(&name_lower);
+                if bare == query_lower
+                    || name_lower == query_lower
+                    || name_lower.ends_with(&format!("::{}", query_lower))
+                {
+                    for sym in ext_syms {
+                        let def = sym
+                            .signature
+                            .clone()
+                            .unwrap_or_else(|| format!("{} {}", sym.kind, name));
+                        definitions.push(DefinitionInfo {
+                            name: name.clone(),
+                            kind: sym.kind.clone(),
+                            file: format!("[{}] {}", sym.crate_name, sym.file),
+                            line: sym.line,
+                            visibility: "pub".to_string(),
+                            generics: String::new(),
                             definition: def,
                         });
                     }
@@ -1887,13 +2018,13 @@ impl ServerHandler for CharterServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Charter codebase structural analysis server. Tools: search_symbols (fuzzy search, regex=true for pattern matching), find_symbol (exact/fuzzy lookup), find_references (type/symbol usage sites), find_implementations (includes derives), find_callers (with receiver type, falls back to references for types), find_dependencies (with receiver type), get_module_tree, get_type_hierarchy (includes derives), summarize, get_snippet (captured function bodies with end_line for read_source), read_source (any source range), search_text (regex text search with glob filtering and context lines), rescan. All return JSON.".to_string(),
+                "Charter codebase structural analysis server. Tools: search_symbols (fuzzy search, regex=true for pattern matching), find_symbol (exact/fuzzy lookup), find_references (type/symbol usage sites), find_implementations (includes derives), find_callers (with receiver type, falls back to references for types), find_dependencies (with receiver type), get_module_tree, get_type_hierarchy (includes derives), summarize, get_snippet (captured function bodies with end_line for read_source), get_imports (file imports or symbol import locations), read_source (any source range), search_text (regex text search with glob filtering and context lines), rescan. All return JSON.".to_string(),
             ),
         }
     }
 }
 
-pub async fn serve(root: &Path) -> Result<()> {
+pub async fn serve(root: &Path, external: bool) -> Result<()> {
     let workspace = detect_workspace(root).await?;
 
     let cache_path = root.join(".charter/cache.bin");
@@ -1907,7 +2038,30 @@ pub async fn serve(root: &Path) -> Result<()> {
     let symbol_table = pipeline::build_symbol_table(&result.files);
     let references = pipeline::run_phase2(&result.files, &symbol_table);
 
-    let index = Arc::new(RwLock::new(Index::new(result, symbol_table, references)));
+    let mut index = Index::new(result, symbol_table, references);
+
+    if external {
+        let direct_deps = external::parse_direct_deps(root);
+        let crates = external::collect_external_crates(root, &direct_deps);
+        let ext_symbols = external::extract_external_symbols(&crates);
+        let mut ext_map = std::collections::HashMap::new();
+        for sym in ext_symbols {
+            ext_map
+                .entry(sym.name.clone())
+                .or_insert_with(Vec::new)
+                .push(ExternalSymbolInfo {
+                    name: sym.name,
+                    kind: sym.kind,
+                    crate_name: sym.crate_name,
+                    file: sym.file,
+                    line: sym.line,
+                    signature: sym.signature,
+                });
+        }
+        index.external_symbols = ext_map;
+    }
+
+    let index = Arc::new(RwLock::new(index));
 
     let server = CharterServer::new(index, root.to_path_buf());
 

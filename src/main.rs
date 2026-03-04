@@ -12,9 +12,9 @@ async fn main() -> Result<()> {
             let root = detect::find_project_root(cli.path).await?;
             pipeline::capture(&root).await?;
         }
-        Some(Commands::Serve { path }) => {
+        Some(Commands::Serve { path, external }) => {
             let root = detect::find_project_root(path).await?;
-            serve::serve(&root).await?;
+            serve::serve(&root, external).await?;
         }
     }
 

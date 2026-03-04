@@ -20,5 +20,8 @@ pub enum Commands {
     Serve {
         #[arg(help = "Project root (default: auto-detect from cwd)")]
         path: Option<PathBuf>,
+
+        #[arg(long, help = "Index external crate symbols from Cargo registry")]
+        external: bool,
     },
 }

@@ -1385,8 +1385,8 @@ fn extract_macro_argument(node: &Node, source: &[u8]) -> Option<String> {
     None
 }
 
-const MAX_FULL_BODY_CHARS: usize = 2000;
-const MAX_TOTAL_SNIPPET_BUDGET: usize = 200_000;
+const MAX_FULL_BODY_CHARS: usize = 8000;
+const MAX_TOTAL_SNIPPET_BUDGET: usize = 500_000;
 
 fn capture_function_body(
     body_node: &Node,
@@ -1471,8 +1471,8 @@ fn extract_body_summary(node: &Node, source: &[u8]) -> BodySummary {
         &mut key_calls,
     );
 
-    early_returns.truncate(5);
-    key_calls.truncate(10);
+    early_returns.truncate(10);
+    key_calls.truncate(20);
 
     BodySummary {
         line_count,
@@ -1506,7 +1506,7 @@ fn collect_body_summary_info(
             if let Some(function) = node.child_by_field_name("function") {
                 let call_text = node_text(&function, source);
                 if !is_trivial_call(&call_text)
-                    && key_calls.len() < 10
+                    && key_calls.len() < 20
                     && !key_calls.contains(&call_text)
                 {
                     key_calls.push(call_text);
