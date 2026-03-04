@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::cache::Cache;
 use crate::detect::detect_workspace;
-use crate::extract::symbols::{Symbol, SymbolKind};
+use crate::extract::symbols::{FunctionBody, Symbol, SymbolKind};
 use crate::pipeline::{self, PipelineResult, walk};
 
 pub struct Index {
@@ -50,6 +50,7 @@ pub struct SnippetInfo {
     pub impl_type: Option<String>,
     pub file: String,
     pub line: usize,
+    pub end_line: usize,
     pub body: String,
     pub importance_score: u32,
 }
@@ -115,25 +116,81 @@ impl Index {
                         signature: Some(method.signature.clone()),
                         visibility: format!("{}", method.visibility),
                     };
-                    symbols_by_name.entry(qualified).or_default().push(info);
+                    symbols_by_name
+                        .entry(qualified)
+                        .or_default()
+                        .push(info.clone());
+                    symbols_by_name
+                        .entry(method.name.clone())
+                        .or_default()
+                        .push(info);
+                }
+            }
+
+            let inherent_method_keys: std::collections::HashSet<String> = file
+                .parsed
+                .symbols
+                .inherent_impls
+                .iter()
+                .flat_map(|imp| {
+                    imp.methods
+                        .iter()
+                        .map(move |m| format!("{}::{}", imp.type_name, m.name))
+                })
+                .collect();
+
+            for complexity_entry in &file.parsed.complexity {
+                if let Some(ref parent_type) = complexity_entry.impl_type {
+                    let qualified = format!("{}::{}", parent_type, complexity_entry.name);
+                    if inherent_method_keys.contains(&qualified) {
+                        continue;
+                    }
+                    let info = SymbolInfo {
+                        name: complexity_entry.name.clone(),
+                        kind: "method".to_string(),
+                        file: file.relative_path.clone(),
+                        line: complexity_entry.line,
+                        signature: None,
+                        visibility: if complexity_entry.metrics.is_public {
+                            "pub".to_string()
+                        } else {
+                            "private".to_string()
+                        },
+                    };
+                    symbols_by_name
+                        .entry(qualified)
+                        .or_default()
+                        .push(info.clone());
+                    symbols_by_name
+                        .entry(complexity_entry.name.clone())
+                        .or_default()
+                        .push(info);
                 }
             }
 
             for call_info in &file.parsed.call_graph {
                 let caller = call_info.caller.qualified_name();
+                let bare_caller = call_info.caller.name.clone();
                 let caller_impl_type = call_info.caller.impl_type.clone();
                 let caller_line = call_info.line;
                 for callee in &call_info.callees {
                     let callee_name = callee.qualified_target();
+                    let target = CallTarget {
+                        name: callee_name.clone(),
+                        receiver_type: callee.target_type.clone(),
+                        file: file.relative_path.clone(),
+                        line: callee.line,
+                    };
                     call_graph
                         .entry(caller.clone())
                         .or_default()
-                        .push(CallTarget {
-                            name: callee_name.clone(),
-                            receiver_type: callee.target_type.clone(),
-                            file: file.relative_path.clone(),
-                            line: callee.line,
-                        });
+                        .push(target.clone());
+                    if bare_caller != caller {
+                        call_graph
+                            .entry(bare_caller.clone())
+                            .or_default()
+                            .push(target);
+                    }
                     let caller_info = CallerInfo {
                         name: caller.clone(),
                         impl_type: caller_impl_type.clone(),
@@ -166,38 +223,26 @@ impl Index {
                 } else {
                     captured.function_name.clone()
                 };
-                let body_text = captured
-                    .body
-                    .full_text
-                    .clone()
-                    .unwrap_or_else(|| "[body not captured]".to_string());
+                let body_text = body_text_from_captured(&captured.body);
+                let end_line = compute_end_line(captured.line, &captured.body);
+                let snippet = SnippetInfo {
+                    function_name: captured.function_name.clone(),
+                    impl_type: captured.impl_type.clone(),
+                    file: file.relative_path.clone(),
+                    line: captured.line,
+                    end_line,
+                    body: body_text,
+                    importance_score: captured.importance_score,
+                };
                 snippets_by_name
                     .entry(key.clone())
                     .or_default()
-                    .push(SnippetInfo {
-                        function_name: captured.function_name.clone(),
-                        impl_type: captured.impl_type.clone(),
-                        file: file.relative_path.clone(),
-                        line: captured.line,
-                        body: body_text,
-                        importance_score: captured.importance_score,
-                    });
+                    .push(snippet.clone());
                 if captured.impl_type.is_some() {
                     snippets_by_name
                         .entry(captured.function_name.clone())
                         .or_default()
-                        .push(SnippetInfo {
-                            function_name: captured.function_name.clone(),
-                            impl_type: captured.impl_type.clone(),
-                            file: file.relative_path.clone(),
-                            line: captured.line,
-                            body: captured
-                                .body
-                                .full_text
-                                .clone()
-                                .unwrap_or_else(|| "[body not captured]".to_string()),
-                            importance_score: captured.importance_score,
-                        });
+                        .push(snippet);
                 }
             }
         }
@@ -268,6 +313,37 @@ fn symbol_to_info(symbol: &Symbol, file: &str) -> SymbolInfo {
         signature,
         visibility: format!("{}", symbol.visibility),
     }
+}
+
+fn compute_end_line(start_line: usize, body: &FunctionBody) -> usize {
+    if let Some(ref text) = body.full_text {
+        return start_line + text.lines().count().saturating_sub(1);
+    }
+    if let Some(ref summary) = body.summary {
+        return start_line + summary.line_count.saturating_sub(1);
+    }
+    start_line
+}
+
+fn body_text_from_captured(body: &FunctionBody) -> String {
+    if let Some(ref text) = body.full_text {
+        return text.clone();
+    }
+    if let Some(ref summary) = body.summary {
+        let mut parts = Vec::new();
+        parts.push(format!(
+            "{} lines, {} statements",
+            summary.line_count, summary.statement_count
+        ));
+        if !summary.key_calls.is_empty() {
+            parts.push(format!("calls: {}", summary.key_calls.join(", ")));
+        }
+        if !summary.early_returns.is_empty() {
+            parts.push(format!("returns: {}", summary.early_returns.join(", ")));
+        }
+        return parts.join("; ");
+    }
+    "[body not captured]".to_string()
 }
 
 pub async fn build_index(root: &Path) -> Result<Index> {

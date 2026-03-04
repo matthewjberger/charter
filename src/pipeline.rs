@@ -12,6 +12,7 @@ use tokio::task::JoinSet;
 
 use crate::cache::{Cache, CacheEntry, FileData};
 use crate::detect::{WorkspaceInfo, detect_workspace};
+use crate::extract::symbols::Visibility;
 use crate::git::{GitInfo, get_churn_data, get_git_info};
 use crate::output;
 
@@ -397,18 +398,136 @@ async fn process_file(path: &Path, root: &Path, cache: &Cache) -> Result<Option<
     }))
 }
 
+fn cooccurrence_score(
+    def_file: &str,
+    symbol_name: &str,
+    file_symbols: &HashMap<String, Vec<String>>,
+    file_identifiers: &HashMap<String, std::collections::HashSet<String>>,
+) -> usize {
+    let siblings: Vec<&String> = file_symbols
+        .get(def_file)
+        .map(|syms| syms.iter().filter(|s| s.as_str() != symbol_name).collect())
+        .unwrap_or_default();
+    if siblings.is_empty() {
+        return 0;
+    }
+    let mut score = 0;
+    for (file_path, ids) in file_identifiers {
+        if file_path == def_file {
+            continue;
+        }
+        if !ids.contains(symbol_name) {
+            continue;
+        }
+        for sibling in &siblings {
+            if ids.contains(sibling.as_str()) {
+                score += 1;
+            }
+        }
+    }
+    score
+}
+
 pub fn build_symbol_table(files: &[FileResult]) -> HashMap<String, (String, usize)> {
-    let mut table = HashMap::new();
+    let mut candidates: HashMap<String, Vec<(String, usize)>> = HashMap::new();
 
     for file in files {
         for symbol in &file.parsed.symbols.symbols {
             if is_pascal_case(&symbol.name) {
-                table.insert(
-                    symbol.name.clone(),
-                    (file.relative_path.clone(), symbol.line),
-                );
+                candidates
+                    .entry(symbol.name.clone())
+                    .or_default()
+                    .push((file.relative_path.clone(), symbol.line));
             }
         }
+
+        for re_export in &file.parsed.re_exports {
+            if re_export.visibility == Visibility::Private {
+                continue;
+            }
+            let name = re_export
+                .source_path
+                .rsplit("::")
+                .next()
+                .unwrap_or(&re_export.source_path);
+            if is_pascal_case(name) && !candidates.contains_key(name) {
+                candidates
+                    .entry(name.to_string())
+                    .or_default()
+                    .push((file.relative_path.clone(), re_export.line));
+            }
+        }
+    }
+
+    let has_duplicates = candidates.values().any(|defs| defs.len() > 1);
+
+    let mut file_symbols: HashMap<String, Vec<String>> = HashMap::new();
+    let mut file_identifiers: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    if has_duplicates {
+        for file in files {
+            let syms: Vec<String> = file
+                .parsed
+                .symbols
+                .symbols
+                .iter()
+                .map(|s| s.name.clone())
+                .collect();
+            file_symbols.insert(file.relative_path.clone(), syms);
+            let ids: std::collections::HashSet<String> = file
+                .parsed
+                .identifier_locations
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
+            file_identifiers.insert(file.relative_path.clone(), ids);
+        }
+    }
+
+    let mut table = HashMap::new();
+    for (name, mut defs) in candidates {
+        if defs.len() == 1 {
+            table.insert(name, defs.remove(0));
+        } else {
+            let best = defs
+                .into_iter()
+                .max_by(|(file_a, _), (file_b, _)| {
+                    let score_a =
+                        cooccurrence_score(file_a, &name, &file_symbols, &file_identifiers);
+                    let score_b =
+                        cooccurrence_score(file_b, &name, &file_symbols, &file_identifiers);
+                    score_a.cmp(&score_b).then_with(|| file_b.cmp(file_a))
+                })
+                .unwrap();
+            table.insert(name, best);
+        }
+    }
+
+    let mut freq: HashMap<String, HashMap<String, (usize, usize)>> = HashMap::new();
+    for file in files {
+        for (name, line) in &file.parsed.identifier_locations {
+            if !is_pascal_case(name) || table.contains_key(name) {
+                continue;
+            }
+            let entry = freq.entry(name.clone()).or_default();
+            let file_entry = entry
+                .entry(file.relative_path.clone())
+                .or_insert((0, *line));
+            file_entry.0 += 1;
+            if *line < file_entry.1 {
+                file_entry.1 = *line;
+            }
+        }
+    }
+
+    for (name, file_counts) in freq {
+        if file_counts.len() < 5 {
+            continue;
+        }
+        let (best_file, &(_, first_line)) = file_counts
+            .iter()
+            .max_by_key(|(_, (count, _))| *count)
+            .unwrap();
+        table.insert(name, (best_file.clone(), first_line));
     }
 
     table
@@ -428,10 +547,6 @@ pub fn run_phase2(
 
             if let Some((def_file, def_line)) = symbol_table.get(name) {
                 if def_file == &file.relative_path && *def_line == *line {
-                    continue;
-                }
-
-                if def_file == &file.relative_path {
                     continue;
                 }
 

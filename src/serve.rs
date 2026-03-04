@@ -43,12 +43,19 @@ pub struct FindImplementationsParams {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct FindCallersParams {
     pub symbol: String,
+    #[serde(default)]
+    pub depth: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct FindDependenciesParams {
     pub symbol: String,
     pub direction: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct FindReferencesParams {
+    pub symbol: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -73,11 +80,34 @@ pub struct SearchSymbolsParams {
     pub kind: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub regex: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GetSnippetParams {
     pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GetDefinitionParams {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DefinitionResult {
+    pub definitions: Vec<DefinitionInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DefinitionInfo {
+    pub name: String,
+    pub kind: String,
+    pub file: String,
+    pub line: usize,
+    pub visibility: String,
+    pub generics: String,
+    pub definition: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -259,7 +289,16 @@ pub struct MethodResult {
 
 #[derive(Debug, Serialize)]
 pub struct CallersResult {
-    pub callers: Vec<CallerInfo>,
+    pub callers: Vec<CallerWithDepth>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CallerWithDepth {
+    pub name: String,
+    pub impl_type: Option<String>,
+    pub file: String,
+    pub line: usize,
+    pub depth: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -337,6 +376,13 @@ pub struct RescanResult {
 }
 
 #[derive(Debug, Serialize)]
+pub struct FindReferencesResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub definition: Option<ReferenceInfo>,
+    pub references: Vec<ReferenceInfo>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SnippetResult {
     pub snippets: Vec<SnippetInfo>,
 }
@@ -352,64 +398,110 @@ impl CharterServer {
     }
 
     #[tool(
-        description = "Search for symbols by name (fuzzy/partial matching supported). Filter by kind and limit results."
+        description = "Search for symbols by name (fuzzy/partial matching supported). Filter by kind and limit results. Set regex=true to match symbol names against a regex pattern."
     )]
     async fn search_symbols(
         &self,
         params: Parameters<SearchSymbolsParams>,
     ) -> Result<String, McpError> {
         let index = self.index.read().await;
-        let query = params.0.query.to_lowercase();
         let limit = params.0.limit.unwrap_or(50);
+        let use_regex = params.0.regex.unwrap_or(false);
 
-        let mut symbols = Vec::new();
+        let compiled_regex = if use_regex {
+            match regex::RegexBuilder::new(&params.0.query)
+                .case_insensitive(true)
+                .build()
+            {
+                Ok(re) => Some(re),
+                Err(error) => {
+                    return Ok(format!(
+                        "{{\"error\": \"Invalid regex pattern: {}\"}}",
+                        error
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        let query = params.0.query.to_lowercase();
+
+        let mut scored_symbols: Vec<(u32, SymbolResult)> = Vec::new();
         let mut traits = Vec::new();
         let mut calls = Vec::new();
 
         for (name, syms) in &index.symbols_by_name {
-            let name_lower = name.to_lowercase();
-            if name_lower.contains(&query) || fuzzy_match(&query, &name_lower) {
-                for sym in syms {
-                    if let Some(ref kind_filter) = params.0.kind {
-                        if &sym.kind != kind_filter {
-                            continue;
-                        }
+            let score = if let Some(ref re) = compiled_regex {
+                if re.is_match(name) { 100 } else { 0 }
+            } else {
+                let name_lower = name.to_lowercase();
+                let bare_lower = bare_name(&name_lower);
+                symbol_match_score(&query, &name_lower, bare_lower)
+            };
+            if score == 0 {
+                continue;
+            }
+            for sym in syms {
+                if let Some(ref kind_filter) = params.0.kind {
+                    if &sym.kind != kind_filter {
+                        continue;
                     }
-                    symbols.push(SymbolResult {
+                }
+                let kind_bonus = match sym.kind.as_str() {
+                    "struct" | "enum" | "trait" => 10,
+                    "function" => 5,
+                    _ => 0,
+                };
+                scored_symbols.push((
+                    score + kind_bonus,
+                    SymbolResult {
                         name: name.clone(),
                         kind: sym.kind.clone(),
                         file: sym.file.clone(),
                         line: sym.line,
                         signature: sym.signature.clone(),
                         visibility: sym.visibility.clone(),
+                    },
+                ));
+            }
+        }
+
+        scored_symbols.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_symbols
+            .dedup_by(|a, b| a.1.name == b.1.name && a.1.file == b.1.file && a.1.line == b.1.line);
+        let symbols: Vec<SymbolResult> = scored_symbols
+            .into_iter()
+            .take(limit)
+            .map(|(_, sym)| sym)
+            .collect();
+
+        if compiled_regex.is_none() {
+            for (trait_name, impls) in &index.impl_map {
+                let trait_lower = trait_name.to_lowercase();
+                let bare = bare_name(&trait_lower);
+                if bare == query || trait_lower == query || bare.contains(&query) {
+                    traits.push(TraitResult {
+                        trait_name: trait_name.clone(),
+                        implementors: impls.iter().map(|i| i.type_name.clone()).collect(),
                     });
                 }
             }
-        }
 
-        for (trait_name, impls) in &index.impl_map {
-            let trait_lower = trait_name.to_lowercase();
-            if trait_lower.contains(&query) {
-                traits.push(TraitResult {
-                    trait_name: trait_name.clone(),
-                    implementors: impls.iter().map(|i| i.type_name.clone()).collect(),
-                });
+            for (caller, targets) in &index.call_graph {
+                let caller_lower = caller.to_lowercase();
+                let bare = bare_name(&caller_lower);
+                if bare == query || caller_lower == query || bare.contains(&query) {
+                    calls.push(CallResult {
+                        caller: caller.clone(),
+                        callees: targets.iter().map(|t| t.name.clone()).collect(),
+                    });
+                }
             }
-        }
 
-        for (caller, targets) in &index.call_graph {
-            let caller_lower = caller.to_lowercase();
-            if caller_lower.contains(&query) {
-                calls.push(CallResult {
-                    caller: caller.clone(),
-                    callees: targets.iter().map(|t| t.name.clone()).collect(),
-                });
-            }
+            traits.truncate(limit / 2);
+            calls.truncate(limit / 2);
         }
-
-        symbols.truncate(limit);
-        traits.truncate(limit / 2);
-        calls.truncate(limit / 2);
 
         let result = SearchResult {
             symbols,
@@ -425,70 +517,45 @@ impl CharterServer {
     )]
     async fn find_symbol(&self, params: Parameters<FindSymbolParams>) -> Result<String, McpError> {
         let index = self.index.read().await;
-        let mut results = Vec::new();
         let query_lower = params.0.name.to_lowercase();
+        let mut scored: Vec<(u32, SymbolResult)> = Vec::new();
 
-        if let Some(symbols) = index.symbols_by_name.get(&params.0.name) {
+        for (name, symbols) in &index.symbols_by_name {
+            let name_lower = name.to_lowercase();
+            let bare_lower = bare_name(&name_lower);
+            let score = symbol_match_score(&query_lower, &name_lower, bare_lower);
+            if score == 0 {
+                continue;
+            }
             for sym in symbols {
                 if let Some(ref kind_filter) = params.0.kind {
                     if &sym.kind != kind_filter {
                         continue;
                     }
                 }
-                results.push(SymbolResult {
-                    name: sym.name.clone(),
-                    kind: sym.kind.clone(),
-                    file: sym.file.clone(),
-                    line: sym.line,
-                    signature: sym.signature.clone(),
-                    visibility: sym.visibility.clone(),
-                });
-            }
-        }
-
-        for (qualified_name, symbols) in &index.symbols_by_name {
-            if qualified_name.ends_with(&format!("::{}", params.0.name)) {
-                for sym in symbols {
-                    if let Some(ref kind_filter) = params.0.kind {
-                        if &sym.kind != kind_filter {
-                            continue;
-                        }
-                    }
-                    results.push(SymbolResult {
-                        name: qualified_name.clone(),
+                let kind_bonus = match sym.kind.as_str() {
+                    "struct" | "enum" | "trait" => 10,
+                    "function" => 5,
+                    _ => 0,
+                };
+                scored.push((
+                    score + kind_bonus,
+                    SymbolResult {
+                        name: name.clone(),
                         kind: sym.kind.clone(),
                         file: sym.file.clone(),
                         line: sym.line,
                         signature: sym.signature.clone(),
                         visibility: sym.visibility.clone(),
-                    });
-                }
+                    },
+                ));
             }
         }
 
-        if results.is_empty() {
-            for (name, symbols) in &index.symbols_by_name {
-                let name_lower = name.to_lowercase();
-                if name_lower.contains(&query_lower) || fuzzy_match(&query_lower, &name_lower) {
-                    for sym in symbols {
-                        if let Some(ref kind_filter) = params.0.kind {
-                            if &sym.kind != kind_filter {
-                                continue;
-                            }
-                        }
-                        results.push(SymbolResult {
-                            name: name.clone(),
-                            kind: sym.kind.clone(),
-                            file: sym.file.clone(),
-                            line: sym.line,
-                            signature: sym.signature.clone(),
-                            visibility: sym.visibility.clone(),
-                        });
-                    }
-                }
-            }
-            results.truncate(20);
-        }
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored
+            .dedup_by(|a, b| a.1.name == b.1.name && a.1.file == b.1.file && a.1.line == b.1.line);
+        let results: Vec<SymbolResult> = scored.into_iter().take(20).map(|(_, sym)| sym).collect();
 
         Ok(serde_json::to_string_pretty(&results).unwrap_or_else(|_| "[]".to_string()))
     }
@@ -501,29 +568,49 @@ impl CharterServer {
         params: Parameters<FindImplementationsParams>,
     ) -> Result<String, McpError> {
         let index = self.index.read().await;
+        let symbol = &params.0.symbol;
+        let suffix = format!("::{}", symbol);
 
-        let trait_implementors = index
-            .impl_map
-            .get(&params.0.symbol)
-            .cloned()
-            .unwrap_or_default();
+        let mut trait_implementors: Vec<ImplInfo> =
+            index.impl_map.get(symbol).cloned().unwrap_or_default();
+        let suffix_generic = format!("::{}", symbol);
+        for (key, impls) in &index.impl_map {
+            if key == symbol {
+                continue;
+            }
+            let stripped = strip_generics(key);
+            if stripped == symbol
+                || key.ends_with(&suffix_generic)
+                || stripped.ends_with(&suffix_generic)
+            {
+                trait_implementors.extend(impls.clone());
+            }
+        }
 
-        let type_implements = index
+        let mut type_implements: Vec<String> = index
             .reverse_impl_map
-            .get(&params.0.symbol)
+            .get(symbol)
             .cloned()
             .unwrap_or_default();
+        for (key, traits) in &index.reverse_impl_map {
+            if key != symbol && (key.ends_with(&suffix) || strip_generics(key) == symbol) {
+                type_implements.extend(traits.clone());
+            }
+        }
 
-        let derived_traits = index
-            .derive_map
-            .get(&params.0.symbol)
-            .cloned()
-            .unwrap_or_default();
+        let mut derived_traits: Vec<String> =
+            index.derive_map.get(symbol).cloned().unwrap_or_default();
+        for (key, traits) in &index.derive_map {
+            if key != symbol && (key.ends_with(&suffix) || strip_generics(key) == symbol) {
+                derived_traits.extend(traits.clone());
+            }
+        }
 
         let mut methods = Vec::new();
         for file in &index.result.files {
             for inherent_impl in &file.parsed.symbols.inherent_impls {
-                if inherent_impl.type_name == params.0.symbol {
+                if inherent_impl.type_name == *symbol || inherent_impl.type_name.ends_with(&suffix)
+                {
                     for method in &inherent_impl.methods {
                         methods.push(MethodResult {
                             name: method.name.clone(),
@@ -538,6 +625,12 @@ impl CharterServer {
         methods.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.file.cmp(&b.file)));
         methods.dedup_by(|a, b| a.name == b.name && a.file == b.file && a.line == b.line);
 
+        trait_implementors.dedup_by(|a, b| a.type_name == b.type_name && a.file == b.file);
+        type_implements.sort();
+        type_implements.dedup();
+        derived_traits.sort();
+        derived_traits.dedup();
+
         let result = ImplementationsResult {
             trait_implementors,
             type_implements,
@@ -549,35 +642,182 @@ impl CharterServer {
     }
 
     #[tool(
-        description = "Find all call sites of a function or method. Returns caller name, file, and line."
+        description = "Find all references to a type or symbol across the codebase. Returns definition location and all usage sites with file:line."
+    )]
+    async fn find_references(
+        &self,
+        params: Parameters<FindReferencesParams>,
+    ) -> Result<String, McpError> {
+        let index = self.index.read().await;
+        let symbol = &params.0.symbol;
+        let suffix = format!("::{}", symbol);
+
+        let definition = index
+            .symbol_table
+            .get(symbol)
+            .map(|(file, line)| ReferenceInfo {
+                file: file.clone(),
+                line: *line,
+            });
+
+        let mut refs: Vec<ReferenceInfo> = Vec::new();
+
+        if let Some(ref_list) = index.references.get(symbol) {
+            refs.extend(ref_list.iter().map(|(file, line)| ReferenceInfo {
+                file: file.clone(),
+                line: *line,
+            }));
+        }
+
+        for (key, ref_list) in &index.references {
+            if key != symbol && key.ends_with(&suffix) {
+                refs.extend(ref_list.iter().map(|(file, line)| ReferenceInfo {
+                    file: file.clone(),
+                    line: *line,
+                }));
+            }
+        }
+
+        if refs.is_empty() {
+            let query_words = split_pascal_case(symbol);
+            if query_words.len() >= 2 {
+                for (key, ref_list) in &index.references {
+                    let key_words = split_pascal_case(key);
+                    if pascal_words_match(&query_words, &key_words) {
+                        refs.extend(ref_list.iter().map(|(file, line)| ReferenceInfo {
+                            file: file.clone(),
+                            line: *line,
+                        }));
+                    }
+                }
+            }
+        }
+
+        if refs.is_empty() && !crate::pipeline::is_pascal_case(symbol) {
+            if let Some(caller_list) = index.reverse_calls.get(symbol) {
+                refs.extend(caller_list.iter().map(|caller| ReferenceInfo {
+                    file: caller.file.clone(),
+                    line: caller.line,
+                }));
+            }
+            for (key, caller_list) in &index.reverse_calls {
+                if key != symbol && key.ends_with(&suffix) {
+                    refs.extend(caller_list.iter().map(|caller| ReferenceInfo {
+                        file: caller.file.clone(),
+                        line: caller.line,
+                    }));
+                }
+            }
+        }
+
+        refs.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
+        refs.dedup_by(|a, b| a.file == b.file && a.line == b.line);
+
+        let result = FindReferencesResult {
+            definition,
+            references: refs,
+        };
+
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    #[tool(
+        description = "Find all call sites of a function or method. Optional depth (1-3) for transitive callers. Returns caller name, file, line, and depth level."
     )]
     async fn find_callers(
         &self,
         params: Parameters<FindCallersParams>,
     ) -> Result<String, McpError> {
         let index = self.index.read().await;
-        let mut callers = Vec::new();
+        let max_depth = params.0.depth.unwrap_or(1).clamp(1, 3);
+        let mut all_callers: Vec<CallerWithDepth> = Vec::new();
+        let mut seen: std::collections::HashSet<(String, String, usize)> =
+            std::collections::HashSet::new();
+        let mut current_symbols = vec![params.0.symbol.clone()];
 
-        if let Some(caller_list) = index.reverse_calls.get(&params.0.symbol) {
-            callers.extend(caller_list.clone());
-        }
+        for depth in 1..=max_depth {
+            let mut next_symbols = Vec::new();
+            for symbol in &current_symbols {
+                let suffix = format!("::{}", symbol);
+                let mut depth_callers: Vec<CallerInfo> = Vec::new();
 
-        let suffix = format!("::{}", params.0.symbol);
-        for (qualified_name, caller_list) in &index.reverse_calls {
-            if qualified_name.ends_with(&suffix) && qualified_name.as_str() != params.0.symbol {
-                callers.extend(caller_list.clone());
+                if let Some(caller_list) = index.reverse_calls.get(symbol) {
+                    depth_callers.extend(caller_list.clone());
+                }
+                for (qualified_name, caller_list) in &index.reverse_calls {
+                    if qualified_name.ends_with(&suffix) && qualified_name.as_str() != symbol {
+                        depth_callers.extend(caller_list.clone());
+                    }
+                }
+
+                if depth_callers.is_empty() {
+                    if let Some(bare_method) = symbol.rsplit("::").next() {
+                        if bare_method != symbol {
+                            if let Some(caller_list) = index.reverse_calls.get(bare_method) {
+                                depth_callers.extend(caller_list.clone());
+                            }
+                        }
+                    }
+                }
+
+                for caller in depth_callers {
+                    let key = (caller.name.clone(), caller.file.clone(), caller.line);
+                    if seen.insert(key) {
+                        next_symbols.push(caller.name.clone());
+                        all_callers.push(CallerWithDepth {
+                            name: caller.name,
+                            impl_type: caller.impl_type,
+                            file: caller.file,
+                            line: caller.line,
+                            depth,
+                        });
+                    }
+                }
+            }
+            current_symbols = next_symbols;
+            if current_symbols.is_empty() {
+                break;
             }
         }
 
-        callers.sort_by(|a, b| {
-            a.file
-                .cmp(&b.file)
+        if all_callers.is_empty() {
+            let suffix = format!("::{}", params.0.symbol);
+            let mut ref_entries: Vec<(String, usize)> = Vec::new();
+
+            if let Some(ref_list) = index.references.get(&params.0.symbol) {
+                ref_entries.extend(ref_list.clone());
+            }
+            for (key, ref_list) in &index.references {
+                if key != &params.0.symbol && key.ends_with(&suffix) {
+                    ref_entries.extend(ref_list.clone());
+                }
+            }
+
+            for (file, line) in ref_entries {
+                let key = ("<type reference>".to_string(), file.clone(), line);
+                if seen.insert(key) {
+                    all_callers.push(CallerWithDepth {
+                        name: "<type reference>".to_string(),
+                        impl_type: None,
+                        file,
+                        line,
+                        depth: 0,
+                    });
+                }
+            }
+        }
+
+        all_callers.sort_by(|a, b| {
+            a.depth
+                .cmp(&b.depth)
+                .then_with(|| a.file.cmp(&b.file))
                 .then_with(|| a.name.cmp(&b.name))
                 .then_with(|| a.line.cmp(&b.line))
         });
-        callers.dedup_by(|a, b| a.file == b.file && a.name == b.name && a.line == b.line);
 
-        let result = CallersResult { callers };
+        let result = CallersResult {
+            callers: all_callers,
+        };
 
         Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()))
     }
@@ -591,40 +831,81 @@ impl CharterServer {
     ) -> Result<String, McpError> {
         let index = self.index.read().await;
         let direction = params.0.direction.to_lowercase();
+        let symbol = &params.0.symbol;
+        let suffix = format!("::{}", symbol);
 
-        let upstream = if direction == "upstream" || direction == "both" {
-            index
-                .call_graph
-                .get(&params.0.symbol)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let type_file = symbol
+            .split("::")
+            .next()
+            .and_then(|type_name| index.symbol_table.get(type_name))
+            .map(|(file, _)| file.clone());
 
-        let downstream = if direction == "downstream" || direction == "both" {
-            index
-                .reverse_calls
-                .get(&params.0.symbol)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let mut upstream = Vec::new();
+        if direction == "upstream" || direction == "both" {
+            if let Some(targets) = index.call_graph.get(symbol) {
+                upstream.extend(targets.clone());
+            }
+            for (key, targets) in &index.call_graph {
+                if key != symbol && key.ends_with(&suffix) {
+                    upstream.extend(targets.clone());
+                }
+            }
+            if upstream.is_empty() {
+                if let Some(ref target_file) = type_file {
+                    if let Some(bare_method) = symbol.rsplit("::").next() {
+                        for (key, targets) in &index.call_graph {
+                            if key.ends_with(&format!("::{}", bare_method))
+                                && targets.iter().any(|t| t.file == *target_file)
+                            {
+                                upstream.extend(targets.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            upstream.retain(|t| !is_trivial_dependency(&t.name));
+            upstream.dedup_by(|a, b| a.name == b.name && a.file == b.file && a.line == b.line);
+        }
 
-        let references: Vec<ReferenceInfo> = index
-            .references
-            .get(&params.0.symbol)
-            .map(|refs| {
-                refs.iter()
-                    .take(50)
-                    .map(|(file, line)| ReferenceInfo {
-                        file: file.clone(),
-                        line: *line,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut downstream = Vec::new();
+        if direction == "downstream" || direction == "both" {
+            if let Some(callers) = index.reverse_calls.get(symbol) {
+                downstream.extend(callers.clone());
+            }
+            for (key, callers) in &index.reverse_calls {
+                if key != symbol && key.ends_with(&suffix) {
+                    downstream.extend(callers.clone());
+                }
+            }
+            if downstream.is_empty() {
+                if let Some(bare_method) = symbol.rsplit("::").next() {
+                    if let Some(callers) = index.reverse_calls.get(bare_method) {
+                        if let Some(ref target_file) = type_file {
+                            downstream
+                                .extend(callers.iter().filter(|c| c.file == *target_file).cloned());
+                        }
+                    }
+                }
+            }
+            downstream.dedup_by(|a, b| a.name == b.name && a.file == b.file && a.line == b.line);
+        }
+
+        let mut references: Vec<ReferenceInfo> = Vec::new();
+        if let Some(refs) = index.references.get(symbol) {
+            references.extend(refs.iter().take(50).map(|(file, line)| ReferenceInfo {
+                file: file.clone(),
+                line: *line,
+            }));
+        }
+        for (key, refs) in &index.references {
+            if key != symbol && key.ends_with(&suffix) {
+                references.extend(refs.iter().take(50).map(|(file, line)| ReferenceInfo {
+                    file: file.clone(),
+                    line: *line,
+                }));
+            }
+        }
+        references.truncate(50);
 
         let result = DependenciesResult {
             upstream,
@@ -671,24 +952,44 @@ impl CharterServer {
         params: Parameters<GetTypeHierarchyParams>,
     ) -> Result<String, McpError> {
         let index = self.index.read().await;
+        let symbol = &params.0.symbol;
+        let suffix = format!("::{}", symbol);
 
-        let implementors = index
-            .impl_map
-            .get(&params.0.symbol)
-            .cloned()
-            .unwrap_or_default();
+        let mut implementors: Vec<ImplInfo> =
+            index.impl_map.get(symbol).cloned().unwrap_or_default();
+        for (key, impls) in &index.impl_map {
+            if key == symbol {
+                continue;
+            }
+            let stripped = strip_generics(key);
+            if stripped == symbol || key.ends_with(&suffix) || stripped.ends_with(&suffix) {
+                implementors.extend(impls.clone());
+            }
+        }
+        implementors.dedup_by(|a, b| a.type_name == b.type_name && a.file == b.file);
 
-        let implements = index
+        let mut implements: Vec<String> = index
             .reverse_impl_map
-            .get(&params.0.symbol)
+            .get(symbol)
             .cloned()
             .unwrap_or_default();
+        for (key, traits) in &index.reverse_impl_map {
+            if key != symbol && (key.ends_with(&suffix) || strip_generics(key) == symbol) {
+                implements.extend(traits.clone());
+            }
+        }
+        implements.sort();
+        implements.dedup();
 
-        let derived_traits = index
-            .derive_map
-            .get(&params.0.symbol)
-            .cloned()
-            .unwrap_or_default();
+        let mut derived_traits: Vec<String> =
+            index.derive_map.get(symbol).cloned().unwrap_or_default();
+        for (key, traits) in &index.derive_map {
+            if key != symbol && (key.ends_with(&suffix) || strip_generics(key) == symbol) {
+                derived_traits.extend(traits.clone());
+            }
+        }
+        derived_traits.sort();
+        derived_traits.dedup();
 
         let mut supertraits = Vec::new();
         let mut base_classes = Vec::new();
@@ -907,19 +1208,99 @@ impl CharterServer {
         }
 
         if snippets.is_empty() {
-            for (name, snips) in &index.snippets_by_name {
-                let name_lower = name.to_lowercase();
-                if name_lower.contains(&query_lower) {
-                    snippets.extend(snips.clone());
+            if let Some(method_part) = query.rsplit("::").next() {
+                if method_part != query {
+                    let method_lower = method_part.to_lowercase();
+                    for (name, snips) in &index.snippets_by_name {
+                        let name_lower = name.to_lowercase();
+                        let name_method = name_lower.rsplit("::").next().unwrap_or(&name_lower);
+                        if name_method == method_lower && name_lower.contains(&query_lower) {
+                            snippets.extend(snips.clone());
+                        }
+                    }
+                }
+            }
+            if snippets.is_empty() {
+                for (name, snips) in &index.snippets_by_name {
+                    let name_lower = name.to_lowercase();
+                    if name_lower == query_lower {
+                        snippets.extend(snips.clone());
+                    }
                 }
             }
             snippets.truncate(10);
         }
 
         snippets.sort_by(|a, b| b.importance_score.cmp(&a.importance_score));
+        let mut seen = std::collections::HashSet::new();
+        snippets.retain(|s| seen.insert((s.file.clone(), s.line)));
 
         let result = SnippetResult { snippets };
 
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    #[tool(
+        description = "Get the full definition of a struct, enum, or trait by name. Returns fields, variants, or method signatures."
+    )]
+    async fn get_definition(
+        &self,
+        params: Parameters<GetDefinitionParams>,
+    ) -> Result<String, McpError> {
+        let index = self.index.read().await;
+        let query = &params.0.name;
+        let query_lower = query.to_lowercase();
+        let suffix = format!("::{}", query);
+        let mut definitions = Vec::new();
+
+        for file in &index.result.files {
+            for symbol in &file.parsed.symbols.symbols {
+                let name_matches = symbol.name == *query
+                    || symbol.name.eq_ignore_ascii_case(query)
+                    || symbol.name.ends_with(&suffix);
+                if !name_matches {
+                    continue;
+                }
+                let (kind, definition) = format_symbol_definition(symbol);
+                if let Some(def) = definition {
+                    definitions.push(DefinitionInfo {
+                        name: symbol.name.clone(),
+                        kind,
+                        file: file.relative_path.clone(),
+                        line: symbol.line,
+                        visibility: format!("{}", symbol.visibility),
+                        generics: symbol.generics.clone(),
+                        definition: def,
+                    });
+                }
+            }
+        }
+
+        if definitions.is_empty() {
+            for file in &index.result.files {
+                for symbol in &file.parsed.symbols.symbols {
+                    let name_lower = symbol.name.to_lowercase();
+                    if !name_lower.contains(&query_lower) {
+                        continue;
+                    }
+                    let (kind, definition) = format_symbol_definition(symbol);
+                    if let Some(def) = definition {
+                        definitions.push(DefinitionInfo {
+                            name: symbol.name.clone(),
+                            kind,
+                            file: file.relative_path.clone(),
+                            line: symbol.line,
+                            visibility: format!("{}", symbol.visibility),
+                            generics: symbol.generics.clone(),
+                            definition: def,
+                        });
+                    }
+                }
+            }
+            definitions.truncate(10);
+        }
+
+        let result = DefinitionResult { definitions };
         Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()))
     }
 
@@ -1090,6 +1471,254 @@ fn build_cache(files: &[FileResult]) -> Cache {
     cache
 }
 
+fn is_trivial_dependency(name: &str) -> bool {
+    const TRIVIAL_METHODS: &[&str] = &[
+        "unwrap",
+        "expect",
+        "clone",
+        "to_string",
+        "to_owned",
+        "into",
+        "from",
+        "as_ref",
+        "as_mut",
+        "ok",
+        "err",
+        "push",
+        "pop",
+        "insert",
+        "remove",
+        "get",
+        "len",
+        "is_empty",
+        "iter",
+        "collect",
+        "map",
+        "filter",
+        "and_then",
+        "or_else",
+        "ok_or",
+        "ok_or_else",
+        "unwrap_or",
+        "unwrap_or_else",
+        "unwrap_or_default",
+        "default",
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "is_some_and",
+        "is_none_or",
+        "contains",
+        "extend",
+        "clear",
+        "with_capacity",
+        "capacity",
+        "reserve",
+        "truncate",
+        "drain",
+        "retain",
+        "sort",
+        "sort_by",
+        "dedup",
+        "dedup_by",
+        "first",
+        "last",
+        "split",
+        "join",
+        "trim",
+        "trim_start",
+        "trim_end",
+        "starts_with",
+        "ends_with",
+        "to_lowercase",
+        "to_uppercase",
+        "as_str",
+        "as_bytes",
+        "as_slice",
+        "to_vec",
+        "take",
+        "replace",
+        "swap",
+        "min",
+        "max",
+        "clamp",
+        "abs",
+        "floor",
+        "ceil",
+        "round",
+        "powi",
+        "powf",
+        "sqrt",
+        "sin",
+        "cos",
+        "tan",
+        "atan2",
+        "from_le_bytes",
+        "from_be_bytes",
+        "to_le_bytes",
+        "to_be_bytes",
+        "chunks",
+        "chunks_exact",
+        "windows",
+        "enumerate",
+        "zip",
+        "flat_map",
+        "flatten",
+        "any",
+        "all",
+        "find",
+        "position",
+        "count",
+        "sum",
+        "fold",
+        "for_each",
+        "copied",
+        "cloned",
+        "rev",
+        "skip",
+        "chain",
+        "peekable",
+        "fuse",
+        "map_or",
+        "map_or_else",
+        "map_err",
+        "try_inverse",
+        "unwrap_or_else",
+        "saturating_sub",
+        "saturating_add",
+        "checked_add",
+        "checked_sub",
+        "try_into",
+        "try_from",
+        "fmt",
+        "write",
+        "read",
+        "flush",
+        "drop",
+    ];
+
+    let bare = name.rsplit("::").next().unwrap_or(name);
+    let bare = bare.split('.').next_back().unwrap_or(bare);
+
+    if TRIVIAL_METHODS.contains(&bare) {
+        return true;
+    }
+
+    let receiver = name.split("::").next().unwrap_or("");
+    const TRIVIAL_TYPES: &[&str] = &[
+        "Vec", "String", "Option", "Result", "Box", "Arc", "Rc", "HashMap", "HashSet", "BTreeMap",
+        "BTreeSet", "f32", "f64", "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64",
+        "isize", "bool", "str", "Some", "None", "Ok", "Err",
+    ];
+
+    if TRIVIAL_TYPES.contains(&receiver) {
+        return true;
+    }
+
+    name == "?"
+}
+
+fn format_symbol_definition(symbol: &crate::extract::symbols::Symbol) -> (String, Option<String>) {
+    use crate::extract::symbols::VariantPayload;
+    match &symbol.kind {
+        SymbolKind::Struct { fields } => {
+            let mut def = format!(
+                "{}struct {}{}",
+                symbol.visibility.prefix(),
+                symbol.name,
+                symbol.generics,
+            );
+            if fields.is_empty() {
+                def.push(';');
+            } else {
+                def.push_str(" {\n");
+                for field in fields {
+                    def.push_str(&format!(
+                        "    {}{}: {},\n",
+                        field.visibility.prefix(),
+                        field.name,
+                        field.field_type
+                    ));
+                }
+                def.push('}');
+            }
+            ("struct".to_string(), Some(def))
+        }
+        SymbolKind::Enum { variants } => {
+            let mut def = format!(
+                "{}enum {}{}",
+                symbol.visibility.prefix(),
+                symbol.name,
+                symbol.generics,
+            );
+            def.push_str(" {\n");
+            for variant in variants {
+                match &variant.payload {
+                    None => def.push_str(&format!("    {},\n", variant.name)),
+                    Some(VariantPayload::Tuple(types)) => {
+                        def.push_str(&format!("    {}({}),\n", variant.name, types.join(", ")));
+                    }
+                    Some(VariantPayload::Struct(fields)) => {
+                        def.push_str(&format!("    {} {{ ", variant.name));
+                        let field_strs: Vec<String> = fields
+                            .iter()
+                            .map(|(n, t)| format!("{}: {}", n, t))
+                            .collect();
+                        def.push_str(&field_strs.join(", "));
+                        def.push_str(" },\n");
+                    }
+                }
+            }
+            def.push('}');
+            ("enum".to_string(), Some(def))
+        }
+        SymbolKind::Trait {
+            supertraits,
+            methods,
+            associated_types,
+        } => {
+            let mut def = format!(
+                "{}trait {}{}",
+                symbol.visibility.prefix(),
+                symbol.name,
+                symbol.generics,
+            );
+            if !supertraits.is_empty() {
+                def.push_str(&format!(": {}", supertraits.join(" + ")));
+            }
+            def.push_str(" {\n");
+            for assoc_type in associated_types {
+                if let Some(ref bounds) = assoc_type.bounds {
+                    def.push_str(&format!("    type {}: {};\n", assoc_type.name, bounds));
+                } else {
+                    def.push_str(&format!("    type {};\n", assoc_type.name));
+                }
+            }
+            for method in methods {
+                let default_marker = if method.has_default { " { ... }" } else { ";" };
+                def.push_str(&format!(
+                    "    fn {}({}){}\n",
+                    method.name, method.signature, default_marker
+                ));
+            }
+            def.push('}');
+            ("trait".to_string(), Some(def))
+        }
+        _ => {
+            let kind = match &symbol.kind {
+                SymbolKind::Function { .. } => "function",
+                SymbolKind::Const { .. } => "const",
+                SymbolKind::Static { .. } => "static",
+                SymbolKind::TypeAlias { .. } => "type",
+                SymbolKind::Mod => "mod",
+                _ => "other",
+            };
+            (kind.to_string(), None)
+        }
+    }
+}
+
 fn matches_glob(path: &str, glob: &str) -> bool {
     glob_match(path.as_bytes(), glob.as_bytes())
 }
@@ -1146,24 +1775,108 @@ fn glob_match(path: &[u8], pattern: &[u8]) -> bool {
     gx == pattern.len()
 }
 
+fn bare_name(qualified: &str) -> &str {
+    qualified.rsplit("::").next().unwrap_or(qualified)
+}
+
+fn symbol_match_score(query: &str, name_lower: &str, bare_lower: &str) -> u32 {
+    if bare_lower == query || name_lower == query {
+        return 100;
+    }
+    if bare_lower.starts_with(query) {
+        return 80;
+    }
+    let suffix = format!("::{}", query);
+    if name_lower.ends_with(&suffix) {
+        return 70;
+    }
+    if bare_lower.contains(query) {
+        return 50;
+    }
+    if name_lower.contains(query) {
+        return 30;
+    }
+    if fuzzy_match(query, bare_lower) {
+        return 10;
+    }
+    0
+}
+
 fn fuzzy_match(query: &str, target: &str) -> bool {
     if query.is_empty() {
         return true;
     }
+    if query.len() < 3 {
+        return target.contains(query);
+    }
 
-    let mut query_chars = query.chars().peekable();
-    for target_char in target.chars() {
-        if let Some(&query_char) = query_chars.peek() {
-            if query_char == target_char {
-                query_chars.next();
+    let query_chars: Vec<char> = query.chars().collect();
+    let target_chars: Vec<char> = target.chars().collect();
+    let mut query_index = 0;
+    let mut consecutive_total = 0;
+    let mut current_run = 0;
+
+    for &target_char in &target_chars {
+        if query_index < query_chars.len() && query_chars[query_index] == target_char {
+            query_index += 1;
+            current_run += 1;
+            if current_run >= 2 {
+                consecutive_total += 1;
             }
-        }
-        if query_chars.peek().is_none() {
-            return true;
+        } else {
+            current_run = 0;
         }
     }
 
-    query_chars.peek().is_none()
+    query_index == query_chars.len() && consecutive_total >= query.len() / 2
+}
+
+fn split_pascal_case(name: &str) -> Vec<String> {
+    let bare = bare_name(name);
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    for character in bare.chars() {
+        if character.is_ascii_uppercase() && !current.is_empty() {
+            words.push(current.to_lowercase());
+            current.clear();
+        }
+        current.push(character);
+    }
+    if !current.is_empty() {
+        words.push(current.to_lowercase());
+    }
+
+    words
+}
+
+fn pascal_words_match(query_words: &[String], key_words: &[String]) -> bool {
+    if query_words.is_empty() || key_words.len() < query_words.len() {
+        return false;
+    }
+    let mut key_index = 0;
+    for query_word in query_words {
+        let mut found = false;
+        while key_index < key_words.len() {
+            if key_words[key_index] == *query_word {
+                key_index += 1;
+                found = true;
+                break;
+            }
+            key_index += 1;
+        }
+        if !found {
+            return false;
+        }
+    }
+    true
+}
+
+fn strip_generics(name: &str) -> &str {
+    match name.find('<') {
+        Some(index) => &name[..index],
+        None => name,
+    }
 }
 
 #[tool_handler]
@@ -1174,7 +1887,7 @@ impl ServerHandler for CharterServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Charter codebase structural analysis server. Tools: search_symbols (fuzzy search), find_symbol (exact/fuzzy lookup), find_implementations (includes derives), find_callers (with receiver type), find_dependencies (with receiver type), get_module_tree, get_type_hierarchy (includes derives), summarize, get_snippet (captured function bodies), read_source (any source range), search_text (regex text search with glob filtering and context lines), rescan. All return JSON.".to_string(),
+                "Charter codebase structural analysis server. Tools: search_symbols (fuzzy search, regex=true for pattern matching), find_symbol (exact/fuzzy lookup), find_references (type/symbol usage sites), find_implementations (includes derives), find_callers (with receiver type, falls back to references for types), find_dependencies (with receiver type), get_module_tree, get_type_hierarchy (includes derives), summarize, get_snippet (captured function bodies with end_line for read_source), read_source (any source range), search_text (regex text search with glob filtering and context lines), rescan. All return JSON.".to_string(),
             ),
         }
     }

@@ -46,6 +46,7 @@ rmcp = { version = "0.14", features = ["server", "transport-io"] }
 tokio-util = "0.7"
 grep-regex = "0.1"
 grep-searcher = "0.1"
+regex = "1"
 
 [profile.dev]
 opt-level = 1

@@ -877,7 +877,7 @@ fn collect_identifiers(node: &Node, source: &[u8], locations: &mut Vec<(String, 
 
 fn extract_phase1_data(root: &Node, source: &[u8], file_path: &str, result: &mut ParsedFile) {
     let mut cursor = root.walk();
-    let mut snippet_budget = MAX_TOTAL_SNIPPET_BUDGET / 20;
+    let mut snippet_budget = MAX_TOTAL_SNIPPET_BUDGET / 10;
 
     for child in root.children(&mut cursor) {
         match child.kind() {
@@ -887,6 +887,7 @@ fn extract_phase1_data(root: &Node, source: &[u8], file_path: &str, result: &mut
                     source,
                     file_path,
                     None,
+                    false,
                     result,
                     &mut snippet_budget,
                 );
@@ -909,6 +910,7 @@ fn extract_impl_phase1(
     let type_node = node.child_by_field_name("type");
     let type_name = type_node.map(|n| node_text(&n, source));
     let base_type = type_name.as_ref().map(|t| extract_base_type_name(t));
+    let is_trait_impl = node.child_by_field_name("trait").is_some();
 
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
@@ -919,6 +921,7 @@ fn extract_impl_phase1(
                     source,
                     file_path,
                     base_type.clone(),
+                    is_trait_impl,
                     result,
                     snippet_budget,
                 );
@@ -932,6 +935,7 @@ fn extract_function_phase1(
     source: &[u8],
     file_path: &str,
     impl_type: Option<String>,
+    is_trait_impl: bool,
     result: &mut ParsedFile,
     snippet_budget: &mut usize,
 ) {
@@ -942,7 +946,8 @@ fn extract_function_phase1(
 
     let line = node.start_position().row + 1;
     let visibility = extract_visibility(node, source);
-    let is_public = matches!(visibility, Visibility::Public | Visibility::PubCrate);
+    let is_public =
+        matches!(visibility, Visibility::Public | Visibility::PubCrate) || is_trait_impl;
     let is_test = has_test_attribute(node, source);
 
     let body = node.child_by_field_name("body");
@@ -1198,14 +1203,8 @@ fn is_await_call(node: &Node, source: &[u8]) -> bool {
 
 fn infer_receiver_type(node: &Node, source: &[u8]) -> String {
     match node.kind() {
-        "identifier" => {
-            let name = node_text(node, source);
-            if name == "self" {
-                "Self".to_string()
-            } else {
-                name
-            }
-        }
+        "self" => "Self".to_string(),
+        "identifier" => node_text(node, source),
         "call_expression" => {
             if let Some(function) = node.child_by_field_name("function") {
                 let text = node_text(&function, source);
@@ -1387,7 +1386,7 @@ fn extract_macro_argument(node: &Node, source: &[u8]) -> Option<String> {
 }
 
 const MAX_FULL_BODY_CHARS: usize = 2000;
-const MAX_TOTAL_SNIPPET_BUDGET: usize = 50_000;
+const MAX_TOTAL_SNIPPET_BUDGET: usize = 200_000;
 
 fn capture_function_body(
     body_node: &Node,
@@ -1395,7 +1394,7 @@ fn capture_function_body(
     importance_score: u32,
     current_budget: &mut usize,
 ) -> Option<FunctionBody> {
-    if importance_score >= 30 && *current_budget > 0 {
+    if importance_score >= 15 && *current_budget > 0 {
         let body_text = extract_full_body(body_node, source);
         let body_len = body_text.len();
 
@@ -1414,7 +1413,7 @@ fn capture_function_body(
         });
     }
 
-    if importance_score >= 15 {
+    if importance_score >= 5 {
         let summary = extract_body_summary(body_node, source);
         return Some(FunctionBody {
             full_text: None,
